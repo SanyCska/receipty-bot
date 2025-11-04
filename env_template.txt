@@ -1,0 +1,9 @@
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+OPENAI_API_KEY=your_openai_api_key_here
+
+Instructions:
+1. Copy this file to .env
+2. Replace the placeholder values with your actual API keys
+3. Get Telegram bot token from @BotFather on Telegram
+4. Get OpenAI API key from https://platform.openai.com/
+
