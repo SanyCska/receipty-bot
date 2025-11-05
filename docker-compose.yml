@@ -18,8 +18,8 @@ services:
       - ./config:/app/config:ro
       # Mount output directory to persist CSV files
       - ./output:/app/output
-      # Mount data directory for categories CSV
-      - ./data:/app/data:ro
+      # Mount data directory for categories CSV and currency preferences
+      - ./data:/app/data
     # Optional: Add healthcheck
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]

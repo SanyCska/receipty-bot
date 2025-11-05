@@ -133,6 +133,7 @@ jobs:
               -e GOOGLE_SHEETS_TAB_NAME="$GOOGLE_SHEETS_TAB_NAME" \
               -v ${{ secrets.SERVER_PATH }}/config/gs_creds.json:/app/config/gs_creds.json:ro \
               -v ${{ secrets.SERVER_PATH }}/output:/app/output \
+              -v ${{ secrets.SERVER_PATH }}/data:/app/data \
               receipty-bot:latest
           EOF
 
