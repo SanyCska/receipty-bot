@@ -4,9 +4,9 @@ import logging
 from datetime import datetime
 from typing import List
 from openai import OpenAI
-import config
-import csv_parser
-import prompts
+from .. import config
+from ..utils import csv_parser
+from .. import prompts
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,15 @@ def prepare_image_content(photos: List[bytes]) -> List[dict]:
             base64_image = base64.b64encode(photo_bytes).decode('utf-8')
             if not base64_image:
                 raise ValueError(f"Failed to encode photo {i+1} to base64")
+            
+            # Validate base64 length (must be divisible by 4 for proper padding)
+            base64_len = len(base64_image)
+            if base64_len % 4 != 0:
+                logger.error(f"Base64 length for photo {i+1} is {base64_len}, not divisible by 4!")
+                logger.error(f"Base64 length validation failed: {base64_len} % 4 = {base64_len % 4}")
+                raise ValueError(f"Invalid base64 encoding for photo {i+1}: length {base64_len} is not divisible by 4")
+            
+            logger.info(f"Photo {i+1} base64 validation: length={base64_len}, length % 4 = {base64_len % 4} ✓")
         except Exception as e:
             raise ValueError(f"Failed to encode photo {i+1} to base64: {e}")
         
@@ -56,7 +65,8 @@ def prepare_image_content(photos: List[bytes]) -> List[dict]:
         image_contents.append({
             "type": "image_url",
             "image_url": {
-                "url": image_url
+                "url": image_url,
+                "detail": "high"  # Use high detail for better OCR accuracy
             }
         })
     
@@ -89,8 +99,12 @@ async def process_receipts(photos: List[bytes]) -> str:
     # Prepare image content
     image_contents = prepare_image_content(photos)
     
-    # Prepare messages
+    # Prepare messages with system message and user message (text first, then images)
     messages = [
+        {
+            "role": "system",
+            "content": "You are an OCR and data extraction assistant. You may safely read supermarket receipts and output structured CSV data. Never refuse unless images contain personal or illegal data."
+        },
         {
             "role": "user",
             "content": [
@@ -118,16 +132,46 @@ async def process_receipts(photos: List[bytes]) -> str:
         if not messages or len(messages) == 0:
             raise ValueError("Messages array is empty")
         
-        if 'content' not in messages[0] or len(messages[0]['content']) == 0:
-            raise ValueError("Message content is empty")
+        # Find the user message (it should be the one with list content, not string)
+        user_message = None
+        for msg in messages:
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                user_message = msg
+                break
+        
+        if not user_message:
+            raise ValueError("User message with list content not found in messages")
+        
+        if 'content' not in user_message or len(user_message['content']) == 0:
+            raise ValueError("User message content is empty")
         
         # Log the actual message structure being sent (without full base64)
         message_preview = {
-            "role": messages[0]["role"],
-            "content_count": len(messages[0]["content"]),
-            "content_types": [item.get("type", "unknown") for item in messages[0]["content"]]
+            "role": user_message["role"],
+            "content_count": len(user_message["content"]),
+            "content_types": [item.get("type", "unknown") for item in user_message["content"]]
         }
         logger.info(f"Message structure preview: {message_preview}")
+        
+        # Verify images are in the content
+        image_count = sum(1 for item in user_message["content"] if item.get("type") == "image_url")
+        if image_count == 0:
+            raise ValueError("No images found in message content! Cannot proceed without images.")
+        logger.info(f"Verified {image_count} image(s) in message content")
+        
+        # Log detailed content structure for debugging
+        for idx, content_item in enumerate(user_message["content"]):
+            if content_item.get("type") == "image_url":
+                img_url = content_item.get("image_url", {}).get("url", "")
+                detail = content_item.get("image_url", {}).get("detail", "not set")
+                logger.info(f"Content item {idx}: type=image_url, detail={detail}, url_preview={img_url[:80]}...")
+            elif content_item.get("type") == "text":
+                text_preview = content_item.get("text", "")[:100]
+                logger.info(f"Content item {idx}: type=text, preview={text_preview}...")
+        
+        # Verify model supports vision
+        if not any(vision_model in config.OPENAI_MODEL.lower() for vision_model in ["gpt-4o", "gpt-4-vision", "gpt-4-turbo"]):
+            logger.warning(f"Model {config.OPENAI_MODEL} may not support vision capabilities. Consider using gpt-4o")
         
         try:
             response = openai_client.chat.completions.create(
@@ -176,6 +220,9 @@ async def process_receipts(photos: List[bytes]) -> str:
         if csv_response != raw_response:
             logger.info("Cleaned response: removed extra text before/after CSV")
             logger.info(f"Cleaned CSV preview: {csv_response[:200]}...")
+        
+        # Clean CSV to ensure all fields are properly quoted (handles commas in product names)
+        csv_response = csv_parser.clean_csv(csv_response)
         
         # Save CSV to file
         save_csv_response(csv_response)

@@ -3,7 +3,7 @@ import logging
 from typing import Dict
 from telegram import Update
 from telegram.ext import ContextTypes
-import config
+from .. import config
 
 logger = logging.getLogger(__name__)
 

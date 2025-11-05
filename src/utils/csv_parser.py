@@ -3,8 +3,41 @@ import io
 import csv
 import logging
 from typing import List, Dict
+from io import StringIO
 
 logger = logging.getLogger(__name__)
+
+
+def clean_csv(csv_response: str) -> str:
+    """
+    Clean CSV by properly parsing and re-writing with quoted fields.
+    This ensures all text fields are properly quoted, handling commas in product names.
+    
+    Args:
+        csv_response: Raw CSV string (may have unquoted fields with commas)
+        
+    Returns:
+        Cleaned CSV string with all fields properly quoted
+    """
+    try:
+        input_stream = StringIO(csv_response.strip())
+        output_stream = StringIO()
+        
+        reader = csv.reader(input_stream)
+        writer = csv.writer(output_stream, quoting=csv.QUOTE_ALL)
+        
+        for row in reader:
+            if any(cell.strip() for cell in row):  # skip empty lines
+                writer.writerow(row)
+        
+        cleaned = output_stream.getvalue()
+        logger.info("Cleaned CSV: all fields properly quoted")
+        return cleaned
+    except Exception as e:
+        logger.error(f"Error cleaning CSV: {e}")
+        logger.exception("CSV cleaning error traceback:")
+        # Return original if cleaning fails
+        return csv_response
 
 
 def extract_csv_strict(text: str) -> str:
@@ -43,13 +76,13 @@ def extract_csv_strict(text: str) -> str:
     
     # Find the header line (should contain column names)
     header_idx = -1
-    header_keywords = ['original_product_name', 'translated_product_name', 'category', 'subcategory', 'price']
+    header_keywords = ['original_product_name', 'translated_product_name', 'category', 'subcategory', 'price', 'receipt_date']
     
     for i, line in enumerate(lines):
         line_lower = line.lower()
         # Check if this line contains CSV header keywords
         if any(keyword in line_lower for keyword in header_keywords):
-            # Count commas to verify it's a CSV line
+            # Count commas to verify it's a CSV line (at least 4 for old format, 5 for new format with receipt_date)
             if line.count(',') >= 4:
                 header_idx = i
                 break
@@ -134,7 +167,8 @@ def parse_csv(csv_content: str) -> List[Dict[str, str]]:
                 'translated_product_name': row.get('translated_product_name', ''),
                 'category': row.get('category', 'Unknown'),
                 'subcategory': row.get('subcategory', 'Unknown'),
-                'price': row.get('price', '0')
+                'price': row.get('price', '0'),
+                'receipt_date': row.get('receipt_date', '')
             }
             products.append(product)
         

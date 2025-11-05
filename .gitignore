@@ -13,3 +13,7 @@ build/
 venv/
 env/
 receipts_csv/
+output/receipts_csv/
+# Google Sheets credentials
+gs_creds.json
+config/gs_creds.json

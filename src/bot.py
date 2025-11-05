@@ -5,11 +5,12 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-import config
-import csv_parser
-import openai_service
-import formatters
-import telegram_utils
+from . import config
+from .utils import csv_parser
+from .services import openai_service
+from .utils import formatters
+from .utils import telegram_utils
+from .services import gs_service
 
 # Configure logging
 logging.basicConfig(
@@ -78,6 +79,22 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
         message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH)
         for chunk in message_chunks:
             await update.message.reply_text(chunk)
+        
+        # Write to Google Sheets if configured
+        if config.GOOGLE_SHEETS_SPREADSHEET_ID:
+            try:
+                gs_service.write_csv_to_sheet(
+                    csv_response,
+                    config.GOOGLE_SHEETS_SPREADSHEET_ID,
+                    config.GOOGLE_SHEETS_TAB_NAME
+                )
+                logger.info("Successfully wrote data to Google Sheets")
+            except Exception as gs_error:
+                logger.error(f"Error writing to Google Sheets: {gs_error}")
+                logger.exception("Google Sheets error traceback:")
+                # Don't fail the whole operation if Google Sheets write fails
+        else:
+            logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID not configured, skipping Google Sheets write")
             
     except Exception as e:
         logger.error(f"Error handling media group: {e}")
@@ -134,6 +151,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH)
             for chunk in message_chunks:
                 await update.message.reply_text(chunk)
+            
+            # Write to Google Sheets if configured
+            if config.GOOGLE_SHEETS_SPREADSHEET_ID:
+                try:
+                    gs_service.write_csv_to_sheet(
+                        csv_response,
+                        config.GOOGLE_SHEETS_SPREADSHEET_ID,
+                        config.GOOGLE_SHEETS_TAB_NAME
+                    )
+                    logger.info("Successfully wrote data to Google Sheets")
+                except Exception as gs_error:
+                    logger.error(f"Error writing to Google Sheets: {gs_error}")
+                    logger.exception("Google Sheets error traceback:")
+                    # Don't fail the whole operation if Google Sheets write fails
+            else:
+                logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID not configured, skipping Google Sheets write")
                 
         except Exception as e:
             logger.error(f"Error handling photo: {e}")
@@ -173,3 +206,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

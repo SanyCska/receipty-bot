@@ -1,0 +1,2 @@
+"""Receipty Bot - Main package"""
+

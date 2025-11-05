@@ -6,10 +6,16 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Get the project root directory (parent of src/)
+PROJECT_ROOT = Path(__file__).parent.parent
+
 # File paths
-RECEIPT_CATEGORIES_PATH = Path('receipt_categories.csv')
-CSV_OUTPUT_DIR = Path('receipts_csv')
-CSV_OUTPUT_DIR.mkdir(exist_ok=True)
+RECEIPT_CATEGORIES_PATH = PROJECT_ROOT / 'data' / 'receipt_categories.csv'
+CSV_OUTPUT_DIR = PROJECT_ROOT / 'output' / 'receipts_csv'
+CSV_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Google Sheets credentials path
+GS_CREDS_PATH = PROJECT_ROOT / 'config' / 'gs_creds.json'
 
 # API Keys
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -26,4 +32,8 @@ MEDIA_GROUP_IDLE_THRESHOLD = 1.0  # seconds
 
 # Telegram Message Settings
 MAX_MESSAGE_LENGTH = 4000  # Telegram message limit
+
+# Google Sheets Settings
+GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv('GOOGLE_SHEETS_SPREADSHEET_ID')
+GOOGLE_SHEETS_TAB_NAME = os.getenv('GOOGLE_SHEETS_TAB_NAME', 'november_2025')
 

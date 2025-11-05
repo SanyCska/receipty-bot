@@ -1,9 +1,13 @@
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 OPENAI_API_KEY=your_openai_api_key_here
+GOOGLE_SHEETS_SPREADSHEET_ID=your_google_sheets_spreadsheet_id_here
+GOOGLE_SHEETS_TAB_NAME=november_2025
 
 Instructions:
 1. Copy this file to .env
 2. Replace the placeholder values with your actual API keys
 3. Get Telegram bot token from @BotFather on Telegram
 4. Get OpenAI API key from https://platform.openai.com/
+5. Get Google Sheets Spreadsheet ID from the URL of your Google Sheet (the long string between /d/ and /edit)
+6. GOOGLE_SHEETS_TAB_NAME is optional, defaults to 'november_2025' if not set
 
