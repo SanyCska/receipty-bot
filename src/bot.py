@@ -2,8 +2,8 @@
 import asyncio
 import logging
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 
 from . import config
 from .utils import csv_parser
@@ -11,6 +11,7 @@ from .services import openai_service
 from .utils import formatters
 from .utils import telegram_utils
 from .services import gs_service
+from .utils import currency_storage
 
 # Configure logging
 logging.basicConfig(
@@ -19,12 +20,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Conversation states
+WAITING_FOR_CURRENCY = 1
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     await update.message.reply_text(
         "👋 Привет! Отправьте мне фотографии чеков из магазина, и я обработаю их.\n\n"
         "Просто отправьте одну или несколько фотографий чеков."
+    )
+
+
+async def ask_for_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, csv_response: str, products: list):
+    """Ask user to select currency for the receipt"""
+    user_id = update.effective_user.id
+    
+    # Get user's currency preferences
+    user_currencies = currency_storage.get_user_currencies(user_id)
+    
+    # Create keyboard buttons
+    keyboard = []
+    row = []
+    
+    # Show up to 6 currencies (last used first) - this includes defaults if not used yet
+    # We'll arrange them in rows of 2
+    currencies_to_show = user_currencies[:6]  # Show up to 6 currencies
+    
+    for currency in currencies_to_show:
+        row.append(InlineKeyboardButton(currency, callback_data=f"currency_{currency}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    
+    # Add "Other" button
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("Other", callback_data="currency_other")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Store receipt data in context for later use
+    context.user_data['pending_receipt_csv'] = csv_response
+    context.user_data['pending_receipt_products'] = products
+    
+    await update.message.reply_text(
+        "💱 Пожалуйста, выберите валюту чека:",
+        reply_markup=reply_markup
     )
 
 
@@ -80,21 +122,8 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
         for chunk in message_chunks:
             await update.message.reply_text(chunk)
         
-        # Write to Google Sheets if configured
-        if config.GOOGLE_SHEETS_SPREADSHEET_ID:
-            try:
-                gs_service.write_csv_to_sheet(
-                    csv_response,
-                    config.GOOGLE_SHEETS_SPREADSHEET_ID,
-                    config.GOOGLE_SHEETS_TAB_NAME
-                )
-                logger.info("Successfully wrote data to Google Sheets")
-            except Exception as gs_error:
-                logger.error(f"Error writing to Google Sheets: {gs_error}")
-                logger.exception("Google Sheets error traceback:")
-                # Don't fail the whole operation if Google Sheets write fails
-        else:
-            logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID not configured, skipping Google Sheets write")
+        # Ask for currency selection
+        await ask_for_currency(update, context, csv_response, products)
             
     except Exception as e:
         logger.error(f"Error handling media group: {e}")
@@ -102,6 +131,103 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
         await update.message.reply_text(
             "❌ Произошла ошибка при обработке чеков. Попробуйте еще раз или проверьте качество фото."
         )
+
+
+async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, currency: str):
+    """Save receipt to Google Sheets with currency"""
+    csv_response = context.user_data.get('pending_receipt_csv')
+    products = context.user_data.get('pending_receipt_products')
+    
+    if not csv_response or not products:
+        logger.error("No pending receipt data found")
+        return
+    
+    # Add currency to products
+    for product in products:
+        product['currency'] = currency
+    
+    # Write to Google Sheets if configured
+    if config.GOOGLE_SHEETS_SPREADSHEET_ID:
+        try:
+            gs_service.write_products_to_sheet(
+                products,
+                config.GOOGLE_SHEETS_SPREADSHEET_ID,
+                config.GOOGLE_SHEETS_TAB_NAME
+            )
+            logger.info(f"Successfully wrote data to Google Sheets with currency {currency}")
+        except Exception as gs_error:
+            logger.error(f"Error writing to Google Sheets: {gs_error}")
+            logger.exception("Google Sheets error traceback:")
+            # Send error message based on update type
+            if update.callback_query:
+                await update.callback_query.message.reply_text(
+                    "❌ Ошибка при сохранении в Google Sheets, но валюта сохранена."
+                )
+            elif update.message:
+                await update.message.reply_text(
+                    "❌ Ошибка при сохранении в Google Sheets, но валюта сохранена."
+                )
+    else:
+        logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID not configured, skipping Google Sheets write")
+    
+    # Clean up
+    context.user_data.pop('pending_receipt_csv', None)
+    context.user_data.pop('pending_receipt_products', None)
+
+
+async def handle_currency_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle currency button callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    if callback_data == "currency_other":
+        # User selected "Other", ask for custom currency
+        await query.edit_message_text(
+            "💱 Пожалуйста, введите трехбуквенный код валюты (например, GBP, JPY, CNY):"
+        )
+        context.user_data['waiting_for_custom_currency'] = True
+        return WAITING_FOR_CURRENCY
+    else:
+        # User selected a predefined currency
+        currency = callback_data.replace("currency_", "").upper()
+        
+        # Save currency preference
+        currency_storage.add_user_currency(user_id, currency)
+        
+        # Save receipt with currency
+        await save_receipt_with_currency(update, context, currency)
+        
+        await query.edit_message_text(f"✅ Валюта {currency} сохранена. Чек записан в Google Sheets.")
+        return ConversationHandler.END
+
+
+async def handle_custom_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom currency input"""
+    if not context.user_data.get('waiting_for_custom_currency'):
+        return ConversationHandler.END
+    
+    user_id = update.effective_user.id
+    currency_text = update.message.text.strip().upper()
+    
+    # Validate currency code (3 letters)
+    if len(currency_text) != 3 or not currency_text.isalpha():
+        await update.message.reply_text(
+            "❌ Неверный формат. Пожалуйста, введите трехбуквенный код валюты (например, GBP, JPY, CNY):"
+        )
+        return WAITING_FOR_CURRENCY
+    
+    # Save currency preference
+    currency_storage.add_user_currency(user_id, currency_text)
+    
+    # Save receipt with currency
+    await save_receipt_with_currency(update, context, currency_text)
+    
+    context.user_data.pop('waiting_for_custom_currency', None)
+    await update.message.reply_text(f"✅ Валюта {currency_text} сохранена. Чек записан в Google Sheets.")
+    return ConversationHandler.END
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -152,21 +278,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for chunk in message_chunks:
                 await update.message.reply_text(chunk)
             
-            # Write to Google Sheets if configured
-            if config.GOOGLE_SHEETS_SPREADSHEET_ID:
-                try:
-                    gs_service.write_csv_to_sheet(
-                        csv_response,
-                        config.GOOGLE_SHEETS_SPREADSHEET_ID,
-                        config.GOOGLE_SHEETS_TAB_NAME
-                    )
-                    logger.info("Successfully wrote data to Google Sheets")
-                except Exception as gs_error:
-                    logger.error(f"Error writing to Google Sheets: {gs_error}")
-                    logger.exception("Google Sheets error traceback:")
-                    # Don't fail the whole operation if Google Sheets write fails
-            else:
-                logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID not configured, skipping Google Sheets write")
+            # Ask for currency selection
+            await ask_for_currency(update, context, csv_response, products)
                 
         except Exception as e:
             logger.error(f"Error handling photo: {e}")
@@ -192,9 +305,19 @@ def main():
     try:
         application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
         
+        # Create conversation handler for currency selection
+        currency_conv_handler = ConversationHandler(
+            entry_points=[CallbackQueryHandler(handle_currency_callback, pattern="^currency_")],
+            states={
+                WAITING_FOR_CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_currency)],
+            },
+            fallbacks=[],
+        )
+        
         # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        application.add_handler(currency_conv_handler)
         
         # Start bot
         logger.info("Bot started successfully")

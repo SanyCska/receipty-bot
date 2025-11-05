@@ -54,16 +54,25 @@ def write_products_to_sheet(products: List[Dict[str, str]], spreadsheet_id: str,
         
         # Check if headers exist
         existing_headers = worksheet.row_values(1)
+        existing_headers_lower = [h.lower() for h in existing_headers] if existing_headers else []
+        
+        # Define all headers including currency
+        all_headers = ['original_product_name', 'translated_product_name', 'category', 'subcategory', 'price', 'receipt_date', 'currency']
+        
         if not existing_headers or len(existing_headers) < 5:
             # Add headers if they don't exist
-            headers = ['original_product_name', 'translated_product_name', 'category', 'subcategory', 'price', 'receipt_date']
-            worksheet.append_row(headers)
+            worksheet.append_row(all_headers)
             logger.info("Added headers to sheet")
-        elif len(existing_headers) == 5:
-            # Update existing headers if receipt_date is missing
-            if 'receipt_date' not in [h.lower() for h in existing_headers]:
-                headers = ['original_product_name', 'translated_product_name', 'category', 'subcategory', 'price', 'receipt_date']
-                worksheet.update('A1:F1', [headers])
+        else:
+            # Check if currency header is missing
+            if 'currency' not in existing_headers_lower:
+                # Update headers to include currency
+                worksheet.update('A1:G1', [all_headers])
+                logger.info("Updated headers to include currency")
+            elif 'receipt_date' not in existing_headers_lower:
+                # Update headers to include receipt_date (but currency is already there)
+                headers_without_currency = ['original_product_name', 'translated_product_name', 'category', 'subcategory', 'price', 'receipt_date', 'currency']
+                worksheet.update('A1:G1', [headers_without_currency])
                 logger.info("Updated headers to include receipt_date")
         
         # Get the next empty row
@@ -78,7 +87,8 @@ def write_products_to_sheet(products: List[Dict[str, str]], spreadsheet_id: str,
                 product.get('category', ''),
                 product.get('subcategory', ''),
                 product.get('price', ''),
-                product.get('receipt_date', '')
+                product.get('receipt_date', ''),
+                product.get('currency', '')
             ]
             rows_to_add.append(row)
         
