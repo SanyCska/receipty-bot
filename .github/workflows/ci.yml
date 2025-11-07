@@ -7,6 +7,7 @@ on:
       - 'v*'
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -81,16 +82,22 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          # Write the key, ensuring proper formatting
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Start ssh-agent
+          eval "$(ssh-agent -s)"
+          # Add the key to the agent
+          ssh-add ~/.ssh/deploy_key
 
       - name: Add server to known hosts
         run: |
@@ -136,4 +143,9 @@ jobs:
               -v ${{ secrets.SERVER_PATH }}/data:/app/data \
               receipty-bot:latest
           EOF
+      
+      - name: Cleanup SSH key
+        if: always()
+        run: |
+          rm -f ~/.ssh/deploy_key
 
