@@ -98,10 +98,16 @@ jobs:
           eval "$(ssh-agent -s)"
           # Add the key to the agent
           ssh-add ~/.ssh/deploy_key
+          # Verify key was added
+          ssh-add -l
 
       - name: Add server to known hosts
         run: |
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "echo 'SSH connection successful'"
 
       - name: Deploy to server
         env:
@@ -114,13 +120,13 @@ jobs:
           GOOGLE_SHEETS_TAB_NAME: ${{ secrets.GOOGLE_SHEETS_TAB_NAME }}
         run: |
           # Create project directory if it doesn't exist
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.SERVER_PATH }}"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.SERVER_PATH }}"
           
           # Copy files to server
-          scp -r * ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r * ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/
           
           # Build and run Docker container on server
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
             cd ${{ secrets.SERVER_PATH }}
             
             # Stop and remove old container if exists
