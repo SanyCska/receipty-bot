@@ -21,6 +21,8 @@ def get_prompt() -> str:
     categories_csv = load_categories()
 
     prompt = """You are analyzing one or more supermarket receipts (non-personal, sample data only).
+    
+    Receipts will be on serbian language.
 
     TASK:
     1. Read the attached receipt images using your vision capabilities.
@@ -58,6 +60,124 @@ def get_prompt() -> str:
     Categories reference (for classification assistance):
     """
 
+    prompt += categories_csv
+    
+    return prompt
+
+
+def get_prompt_retry_1() -> str:
+    """Get the first retry prompt for OpenAI API"""
+    categories_csv = load_categories()
+    
+    prompt = """You are analyzing a supermarket receipts image.
+
+Receipts will be on serbian language 
+
+STRICT TASK:
+
+1. Detect ALL product rows on the receipt.
+
+2. For EACH product extract ONLY:
+
+   - exact product name as written
+
+   - total price for that product
+
+3. Extract the receipt purchase date if visible.
+
+4. Categorize EACH product using ONLY the provided categories.
+
+5. Translate EACH product name into Russian.
+
+CRITICAL RULES:
+
+- Even if some data is unclear, you MUST still output one row per detected product.
+
+- NEVER skip category assignment.
+
+- NEVER skip translation.
+
+- NEVER add commentary.
+
+OUTPUT FORMAT (MANDATORY, STRICT):
+
+original_product_name,translated_product_name,category,subcategory,price,receipt_date
+
+Rules:
+
+- One line per product.
+
+- ALL text fields in double quotes.
+
+- Decimal separator is '.'.
+
+- Date must be YYYY-MM-DD or empty.
+
+- NO markdown.
+
+- NO explanations.
+
+- NO validation text.
+
+- NO JSON.
+
+Categories reference (for classification assistance):
+"""
+    prompt += categories_csv
+    
+    return prompt
+
+
+def get_prompt_retry_2() -> str:
+    """Get the second retry prompt for OpenAI API"""
+    categories_csv = load_categories()
+    
+    prompt = """You are analyzing a receipt image.
+
+TASK:
+
+1. Extract ALL product rows.
+
+2. For EACH product extract:
+
+   - original product name
+
+   - total product price
+
+3. Extract receipt date if present.
+
+4. Translate product names into Russian.
+
+5. Categorize products using provided categories.
+
+IMPORTANT:
+
+- DO NOT validate or compare totals.
+
+- DO NOT try to match receipt sum.
+
+- DO NOT remove products if totals mismatch.
+
+OUTPUT FORMAT (MANDATORY):
+
+original_product_name,translated_product_name,category,subcategory,price,receipt_date
+
+Rules:
+
+- One product per row.
+
+- All text fields in double quotes.
+
+- Decimal separator is '.'.
+
+- Date format YYYY-MM-DD or empty.
+
+- NO explanations.
+
+- NO markdown.
+
+Categories reference:
+"""
     prompt += categories_csv
     
     return prompt
