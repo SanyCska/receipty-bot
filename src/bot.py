@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # Conversation states
 WAITING_FOR_CURRENCY = 1
+WAITING_FOR_QUANTITY = 2
+WAITING_FOR_PRICE = 3
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -30,6 +32,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Привет! Отправьте мне фотографии чеков из магазина, и я обработаю их.\n\n"
         "Просто отправьте одну или несколько фотографий чеков."
     )
+
+
+async def display_products_with_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, products: list):
+    """Display products list with action buttons"""
+    readable_message = formatters.format_readable_message(products)
+    
+    # Split message if too long (but leave room for buttons message)
+    message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
+    for chunk in message_chunks[:-1]:
+        await update.message.reply_text(chunk)
+    
+    # Last chunk or full message if not split
+    last_message = message_chunks[-1] if message_chunks else readable_message
+    
+    # Add action buttons
+    keyboard = [
+        [InlineKeyboardButton("✏️ Редактировать", callback_data="action_edit")],
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="action_confirm"),
+            InlineKeyboardButton("❌ Отменить", callback_data="action_cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(last_message, reply_markup=reply_markup)
 
 
 async def ask_for_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, csv_response: str, products: list):
@@ -115,15 +142,18 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
         logger.info(f"Processing {num_photos} photos in single API request for media_group_id: {media_group_id}")
         csv_response = await openai_service.process_receipts(photos_to_process)
         products = csv_parser.parse_csv(csv_response)
-        readable_message = formatters.format_readable_message(products)
         
-        # Split message if too long
-        message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH)
-        for chunk in message_chunks:
-            await update.message.reply_text(chunk)
+        # Initialize quantity for each product (default 1 if not present)
+        for product in products:
+            if 'quantity' not in product:
+                product['quantity'] = '1'
         
-        # Ask for currency selection
-        await ask_for_currency(update, context, csv_response, products)
+        # Store products and CSV in context
+        context.user_data['pending_receipt_csv'] = csv_response
+        context.user_data['pending_receipt_products'] = products
+        
+        # Display products with action buttons
+        await display_products_with_actions(update, context, products)
             
     except Exception as e:
         logger.error(f"Error handling media group: {e}")
@@ -230,6 +260,348 @@ async def handle_custom_currency(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
+async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle action button callbacks (Edit, Confirm, Cancel)"""
+    query = update.callback_query
+    await query.answer()
+    
+    callback_data = query.data
+    
+    if callback_data == "action_edit":
+        # Show products as buttons
+        products = context.user_data.get('pending_receipt_products', [])
+        if not products:
+            await query.edit_message_text("❌ Ошибка: список товаров не найден.")
+            return
+        
+        keyboard = []
+        for idx, product in enumerate(products):
+            product_name = product.get('translated_product_name', product.get('original_product_name', f'Товар {idx+1}'))
+            # Truncate long names
+            if len(product_name) > 50:
+                product_name = product_name[:47] + "..."
+            keyboard.append([InlineKeyboardButton(
+                f"{idx+1}. {product_name}",
+                callback_data=f"edit_product_{idx}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="action_back_to_list")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Выберите товар для редактирования:",
+            reply_markup=reply_markup
+        )
+    
+    elif callback_data == "action_confirm":
+        # Proceed to currency selection
+        products = context.user_data.get('pending_receipt_products', [])
+        csv_response = context.user_data.get('pending_receipt_csv', '')
+        
+        if not products or not csv_response:
+            await query.edit_message_text("❌ Ошибка: данные не найдены.")
+            return
+        
+        # Get user's currency preferences
+        user_id = update.effective_user.id
+        user_currencies = currency_storage.get_user_currencies(user_id)
+        
+        # Create keyboard buttons
+        keyboard = []
+        row = []
+        currencies_to_show = user_currencies[:6]
+        
+        for currency in currencies_to_show:
+            row.append(InlineKeyboardButton(currency, callback_data=f"currency_{currency}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("Other", callback_data="currency_other")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "✅ Товары подтверждены.\n\n💱 Пожалуйста, выберите валюту чека:",
+            reply_markup=reply_markup
+        )
+    
+    elif callback_data == "action_cancel":
+        # Cancel and clean up
+        context.user_data.pop('pending_receipt_csv', None)
+        context.user_data.pop('pending_receipt_products', None)
+        context.user_data.pop('editing_product_idx', None)
+        context.user_data.pop('waiting_for_quantity', None)
+        context.user_data.pop('waiting_for_price', None)
+        await query.edit_message_text("❌ Отменено. Можете отправить новый чек.")
+
+
+async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle product selection for editing"""
+    query = update.callback_query
+    await query.answer()
+    
+    callback_data = query.data
+    
+    if callback_data == "action_back_to_list" or callback_data == "action_back_to_products":
+        # Show products list with action buttons again
+        products = context.user_data.get('pending_receipt_products', [])
+        if not products:
+            await query.edit_message_text("❌ Ошибка: список товаров не найден.")
+            return
+        
+        readable_message = formatters.format_readable_message(products)
+        message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
+        last_message = message_chunks[-1] if message_chunks else readable_message
+        
+        keyboard = [
+            [InlineKeyboardButton("✏️ Редактировать", callback_data="action_edit")],
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data="action_confirm"),
+                InlineKeyboardButton("❌ Отменить", callback_data="action_cancel")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(last_message, reply_markup=reply_markup)
+        return
+    
+    if not callback_data.startswith("edit_product_"):
+        return
+    
+    # Extract product index
+    product_idx = int(callback_data.replace("edit_product_", ""))
+    products = context.user_data.get('pending_receipt_products', [])
+    
+    if product_idx < 0 or product_idx >= len(products):
+        await query.edit_message_text("❌ Ошибка: неверный индекс товара.")
+        return
+    
+    # Store which product is being edited
+    context.user_data['editing_product_idx'] = product_idx
+    
+    # Show edit options
+    keyboard = [
+        [InlineKeyboardButton("🔢 Кол-во", callback_data="edit_quantity")],
+        [InlineKeyboardButton("💰 Цена", callback_data="edit_price")],
+        [InlineKeyboardButton("❌ Удалить", callback_data="edit_delete")],
+        [InlineKeyboardButton("◀️ Назад к списку товаров", callback_data="action_back_to_products")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    product = products[product_idx]
+    product_name = product.get('translated_product_name', product.get('original_product_name', 'Товар'))
+    await query.edit_message_text(
+        f"Что изменить?\n\nТовар: {product_name}",
+        reply_markup=reply_markup
+    )
+
+
+async def handle_edit_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle edit type selection (Quantity, Price, Delete)"""
+    query = update.callback_query
+    await query.answer()
+    
+    callback_data = query.data
+    products = context.user_data.get('pending_receipt_products', [])
+    product_idx = context.user_data.get('editing_product_idx')
+    
+    if product_idx is None or product_idx < 0 or product_idx >= len(products):
+        await query.edit_message_text("❌ Ошибка: товар не найден.")
+        return
+    
+    if callback_data == "edit_quantity":
+        context.user_data['waiting_for_quantity'] = True
+        await query.edit_message_text("Введите новое количество:")
+        return WAITING_FOR_QUANTITY
+    
+    elif callback_data == "edit_price":
+        context.user_data['waiting_for_price'] = True
+        await query.edit_message_text("Введите новую цену:")
+        return WAITING_FOR_PRICE
+    
+    elif callback_data == "edit_delete":
+        # Delete product
+        products.pop(product_idx)
+        context.user_data['pending_receipt_products'] = products
+        context.user_data.pop('editing_product_idx', None)
+        
+        # Update CSV if needed
+        if products:
+            # Rebuild CSV from products
+            import csv
+            from io import StringIO
+            output = StringIO()
+            writer = csv.DictWriter(output, fieldnames=['original_product_name', 'translated_product_name', 
+                                                         'category', 'subcategory', 'price', 'receipt_date'])
+            writer.writeheader()
+            for p in products:
+                writer.writerow({
+                    'original_product_name': p.get('original_product_name', ''),
+                    'translated_product_name': p.get('translated_product_name', ''),
+                    'category': p.get('category', 'Unknown'),
+                    'subcategory': p.get('subcategory', 'Unknown'),
+                    'price': p.get('price', '0'),
+                    'receipt_date': p.get('receipt_date', '')
+                })
+            context.user_data['pending_receipt_csv'] = output.getvalue()
+        else:
+            # No products left
+            context.user_data.pop('pending_receipt_csv', None)
+            await query.edit_message_text("❌ Все товары удалены. Отправьте новый чек.")
+            return
+        
+        # Show updated list
+        await show_updated_products_list(query, context, products)
+
+
+async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle quantity input"""
+    if not context.user_data.get('waiting_for_quantity'):
+        return ConversationHandler.END
+    
+    try:
+        quantity = float(update.message.text.strip().replace(',', '.'))
+        if quantity <= 0:
+            await update.message.reply_text("❌ Количество должно быть больше нуля. Попробуйте еще раз:")
+            return WAITING_FOR_QUANTITY
+        
+        products = context.user_data.get('pending_receipt_products', [])
+        product_idx = context.user_data.get('editing_product_idx')
+        
+        if product_idx is None or product_idx < 0 or product_idx >= len(products):
+            await update.message.reply_text("❌ Ошибка: товар не найден.")
+            context.user_data.pop('waiting_for_quantity', None)
+            context.user_data.pop('editing_product_idx', None)
+            return ConversationHandler.END
+        
+        # Update quantity
+        products[product_idx]['quantity'] = str(quantity)
+        context.user_data['pending_receipt_products'] = products
+        context.user_data.pop('waiting_for_quantity', None)
+        context.user_data.pop('editing_product_idx', None)
+        
+        # Update CSV
+        import csv
+        from io import StringIO
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=['original_product_name', 'translated_product_name', 
+                                                     'category', 'subcategory', 'price', 'receipt_date'])
+        writer.writeheader()
+        for p in products:
+            writer.writerow({
+                'original_product_name': p.get('original_product_name', ''),
+                'translated_product_name': p.get('translated_product_name', ''),
+                'category': p.get('category', 'Unknown'),
+                'subcategory': p.get('subcategory', 'Unknown'),
+                'price': p.get('price', '0'),
+                'receipt_date': p.get('receipt_date', '')
+            })
+        context.user_data['pending_receipt_csv'] = output.getvalue()
+        
+        # Show updated list
+        await show_updated_products_list_message(update.message, context, products)
+        
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат. Введите число (например, 2 или 2.5):")
+        return WAITING_FOR_QUANTITY
+
+
+async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle price input"""
+    if not context.user_data.get('waiting_for_price'):
+        return ConversationHandler.END
+    
+    try:
+        price = float(update.message.text.strip().replace(',', '.'))
+        if price < 0:
+            await update.message.reply_text("❌ Цена не может быть отрицательной. Попробуйте еще раз:")
+            return WAITING_FOR_PRICE
+        
+        products = context.user_data.get('pending_receipt_products', [])
+        product_idx = context.user_data.get('editing_product_idx')
+        
+        if product_idx is None or product_idx < 0 or product_idx >= len(products):
+            await update.message.reply_text("❌ Ошибка: товар не найден.")
+            context.user_data.pop('waiting_for_price', None)
+            context.user_data.pop('editing_product_idx', None)
+            return ConversationHandler.END
+        
+        # Update price
+        products[product_idx]['price'] = str(price)
+        context.user_data['pending_receipt_products'] = products
+        context.user_data.pop('waiting_for_price', None)
+        context.user_data.pop('editing_product_idx', None)
+        
+        # Update CSV
+        import csv
+        from io import StringIO
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=['original_product_name', 'translated_product_name', 
+                                                     'category', 'subcategory', 'price', 'receipt_date'])
+        writer.writeheader()
+        for p in products:
+            writer.writerow({
+                'original_product_name': p.get('original_product_name', ''),
+                'translated_product_name': p.get('translated_product_name', ''),
+                'category': p.get('category', 'Unknown'),
+                'subcategory': p.get('subcategory', 'Unknown'),
+                'price': p.get('price', '0'),
+                'receipt_date': p.get('receipt_date', '')
+            })
+        context.user_data['pending_receipt_csv'] = output.getvalue()
+        
+        # Show updated list
+        await show_updated_products_list_message(update.message, context, products)
+        
+        return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат. Введите число (например, 100.50):")
+        return WAITING_FOR_PRICE
+
+
+async def show_updated_products_list(query_or_message, context: ContextTypes.DEFAULT_TYPE, products: list):
+    """Show updated products list with action buttons"""
+    readable_message = formatters.format_readable_message(products)
+    message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
+    last_message = message_chunks[-1] if message_chunks else readable_message
+    
+    keyboard = [
+        [InlineKeyboardButton("✏️ Редактировать", callback_data="action_edit")],
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="action_confirm"),
+            InlineKeyboardButton("❌ Отменить", callback_data="action_cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if hasattr(query_or_message, 'edit_message_text'):
+        # It's a CallbackQuery
+        await query_or_message.edit_message_text(last_message, reply_markup=reply_markup)
+    else:
+        # It's a Message
+        await query_or_message.reply_text(last_message, reply_markup=reply_markup)
+
+
+async def show_updated_products_list_message(message, context: ContextTypes.DEFAULT_TYPE, products: list):
+    """Show updated products list with action buttons (for message updates)"""
+    readable_message = formatters.format_readable_message(products)
+    message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
+    last_message = message_chunks[-1] if message_chunks else readable_message
+    
+    keyboard = [
+        [InlineKeyboardButton("✏️ Редактировать", callback_data="action_edit")],
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="action_confirm"),
+            InlineKeyboardButton("❌ Отменить", callback_data="action_cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await message.reply_text(last_message, reply_markup=reply_markup)
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo messages"""
     media_group_id = update.message.media_group_id
@@ -271,15 +643,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info("Processing single photo")
             csv_response = await openai_service.process_receipts([photo_bytes])
             products = csv_parser.parse_csv(csv_response)
-            readable_message = formatters.format_readable_message(products)
             
-            # Split message if too long
-            message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH)
-            for chunk in message_chunks:
-                await update.message.reply_text(chunk)
+            # Initialize quantity for each product (default 1 if not present)
+            for product in products:
+                if 'quantity' not in product:
+                    product['quantity'] = '1'
             
-            # Ask for currency selection
-            await ask_for_currency(update, context, csv_response, products)
+            # Store products and CSV in context
+            context.user_data['pending_receipt_csv'] = csv_response
+            context.user_data['pending_receipt_products'] = products
+            
+            # Display products with action buttons
+            await display_products_with_actions(update, context, products)
                 
         except Exception as e:
             logger.error(f"Error handling photo: {e}")
@@ -314,9 +689,24 @@ def main():
             fallbacks=[],
         )
         
-        # Add handlers
+        # Create conversation handler for editing products
+        edit_conv_handler = ConversationHandler(
+            entry_points=[
+                CallbackQueryHandler(handle_edit_type_callback, pattern="^edit_(quantity|price|delete)$")
+            ],
+            states={
+                WAITING_FOR_QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_quantity_input)],
+                WAITING_FOR_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price_input)],
+            },
+            fallbacks=[],
+        )
+        
+        # Add handlers (order matters - more specific patterns first)
         application.add_handler(CommandHandler("start", start))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        application.add_handler(CallbackQueryHandler(handle_product_selection, pattern="^edit_product_|^action_back_to_list$|^action_back_to_products$"))
+        application.add_handler(CallbackQueryHandler(handle_action_callback, pattern="^action_"))
+        application.add_handler(edit_conv_handler)
         application.add_handler(currency_conv_handler)
         
         # Start bot

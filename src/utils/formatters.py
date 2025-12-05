@@ -24,9 +24,18 @@ def format_readable_message(products: List[Dict[str, str]]) -> str:
         
         try:
             price = Decimal(price_str)
-            total += price
         except:
             price = Decimal('0')
+        
+        quantity_str = product.get('quantity', '1')
+        try:
+            quantity = Decimal(quantity_str)
+        except:
+            quantity = Decimal('1')
+        
+        # Calculate item total (price * quantity) and add to total
+        item_total = price * quantity
+        total += item_total
         
         category_key = f"{category} - {subcategory}"
         if category_key not in categories:
@@ -35,7 +44,9 @@ def format_readable_message(products: List[Dict[str, str]]) -> str:
         categories[category_key].append({
             'original': product.get('original_product_name', 'N/A'),
             'translated': product.get('translated_product_name', 'N/A'),
-            'price': price
+            'price': price,
+            'quantity': quantity,
+            'item_total': item_total
         })
     
     # Format by category
@@ -43,7 +54,12 @@ def format_readable_message(products: List[Dict[str, str]]) -> str:
         message += f"🏷️ {category_key}\n"
         for item in items:
             message += f"  • {item['translated']} ({item['original']})\n"
-            message += f"    💰 {item['price']:.2f} ₽\n"
+            if item['quantity'] != Decimal('1'):
+                message += f"    🔢 Кол-во: {item['quantity']}\n"
+                message += f"    💰 Цена за единицу: {item['price']:.2f} ₽\n"
+                message += f"    💰 Всего: {item['item_total']:.2f} ₽\n"
+            else:
+                message += f"    💰 {item['price']:.2f} ₽\n"
         message += "\n"
     
     message += f"\n💰 Итого: {total:.2f} ₽"

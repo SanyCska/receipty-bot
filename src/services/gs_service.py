@@ -78,9 +78,19 @@ def write_products_to_sheet(products: List[Dict[str, str]], spreadsheet_id: str,
         # Get the next empty row
         next_row = len(worksheet.get_all_values()) + 1
         
-        # Prepare data rows
+        # Prepare data rows - duplicate products based on quantity
         rows_to_add = []
         for product in products:
+            # Get quantity, default to 1 if not present or invalid
+            quantity_str = product.get('quantity', '1')
+            try:
+                quantity = int(float(quantity_str))  # Handle both int and float strings
+                if quantity < 1:
+                    quantity = 1
+            except (ValueError, TypeError):
+                quantity = 1
+            
+            # Create row data
             row = [
                 product.get('original_product_name', ''),
                 product.get('translated_product_name', ''),
@@ -90,12 +100,15 @@ def write_products_to_sheet(products: List[Dict[str, str]], spreadsheet_id: str,
                 product.get('receipt_date', ''),
                 product.get('currency', '')
             ]
-            rows_to_add.append(row)
+            
+            # Duplicate the product based on quantity
+            for _ in range(quantity):
+                rows_to_add.append(row)
         
         # Append all rows at once (more efficient)
         if rows_to_add:
             worksheet.append_rows(rows_to_add)
-            logger.info(f"Successfully wrote {len(rows_to_add)} rows to Google Sheet '{tab_name}'")
+            logger.info(f"Successfully wrote {len(rows_to_add)} rows to Google Sheet '{tab_name}' (from {len(products)} products with quantities)")
             return True
         else:
             logger.warning("No products to write to Google Sheet")
