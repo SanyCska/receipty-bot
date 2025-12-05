@@ -1,15 +1,30 @@
 """Message formatting utilities"""
 from decimal import Decimal
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
+from . import currency_storage
 
 logger = logging.getLogger(__name__)
 
 
-def format_readable_message(products: List[Dict[str, str]]) -> str:
-    """Format products into readable message"""
+def format_readable_message(products: List[Dict[str, str]], currency: Optional[str] = None) -> str:
+    """
+    Format products into readable message
+    
+    Args:
+        products: List of product dictionaries
+        currency: Currency code (e.g., 'USD', 'EUR'). If None, uses 'RUB' as default
+    """
     if not products:
         return "❌ Не удалось обработать чек. Попробуйте еще раз."
+    
+    # Get currency symbol
+    if currency:
+        currency_symbol = currency_storage.get_currency_symbol(currency)
+    else:
+        # Try to get currency from first product, or default to RUB
+        currency = products[0].get('currency', 'RUB')
+        currency_symbol = currency_storage.get_currency_symbol(currency)
     
     message = "📋 Обработанные товары:\n\n"
     
@@ -56,13 +71,13 @@ def format_readable_message(products: List[Dict[str, str]]) -> str:
             message += f"  • {item['translated']} ({item['original']})\n"
             if item['quantity'] != Decimal('1'):
                 message += f"    🔢 Кол-во: {item['quantity']}\n"
-                message += f"    💰 Цена за единицу: {item['price']:.2f} ₽\n"
-                message += f"    💰 Всего: {item['item_total']:.2f} ₽\n"
+                message += f"    💰 Цена за единицу: {item['price']:.2f} {currency_symbol}\n"
+                message += f"    💰 Всего: {item['item_total']:.2f} {currency_symbol}\n"
             else:
-                message += f"    💰 {item['price']:.2f} ₽\n"
+                message += f"    💰 {item['price']:.2f} {currency_symbol}\n"
         message += "\n"
     
-    message += f"\n💰 Итого: {total:.2f} ₽"
+    message += f"\n💰 Итого: {total:.2f} {currency_symbol}"
     
     return message
 

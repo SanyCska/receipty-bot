@@ -34,9 +34,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def display_products_with_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, products: list):
+async def display_products_with_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, products: list, currency: str = None):
     """Display products list with action buttons"""
-    readable_message = formatters.format_readable_message(products)
+    readable_message = formatters.format_readable_message(products, currency=currency)
     
     # Split message if too long (but leave room for buttons message)
     message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
@@ -57,6 +57,33 @@ async def display_products_with_actions(update: Update, context: ContextTypes.DE
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(last_message, reply_markup=reply_markup)
+
+
+async def display_products_with_actions_from_query(query, context: ContextTypes.DEFAULT_TYPE, products: list, currency: str = None):
+    """Display products list with action buttons from a callback query"""
+    readable_message = formatters.format_readable_message(products, currency=currency)
+    
+    # Split message if too long (but leave room for buttons message)
+    message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
+    
+    # Send all chunks except the last one as new messages
+    for chunk in message_chunks[:-1]:
+        await query.message.reply_text(chunk)
+    
+    # Last chunk or full message if not split
+    last_message = message_chunks[-1] if message_chunks else readable_message
+    
+    # Add action buttons
+    keyboard = [
+        [InlineKeyboardButton("✏️ Редактировать", callback_data="action_edit")],
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data="action_confirm"),
+            InlineKeyboardButton("❌ Отменить", callback_data="action_cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(last_message, reply_markup=reply_markup)
 
 
 async def ask_for_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, csv_response: str, products: list):
@@ -152,8 +179,8 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
         context.user_data['pending_receipt_csv'] = csv_response
         context.user_data['pending_receipt_products'] = products
         
-        # Display products with action buttons
-        await display_products_with_actions(update, context, products)
+        # Ask for currency first, before displaying products
+        await ask_for_currency(update, context, csv_response, products)
             
     except Exception as e:
         logger.error(f"Error handling media group: {e}")
@@ -227,10 +254,17 @@ async def handle_currency_callback(update: Update, context: ContextTypes.DEFAULT
         # Save currency preference
         currency_storage.add_user_currency(user_id, currency)
         
-        # Save receipt with currency
-        await save_receipt_with_currency(update, context, currency)
+        # Store currency in context
+        context.user_data['selected_currency'] = currency
         
-        await query.edit_message_text(f"✅ Валюта {currency} сохранена. Чек записан в Google Sheets.")
+        # Add currency to products
+        products = context.user_data.get('pending_receipt_products', [])
+        for product in products:
+            product['currency'] = currency
+        
+        # Display products with currency symbol
+        await display_products_with_actions_from_query(query, context, products, currency)
+        
         return ConversationHandler.END
 
 
@@ -252,11 +286,18 @@ async def handle_custom_currency(update: Update, context: ContextTypes.DEFAULT_T
     # Save currency preference
     currency_storage.add_user_currency(user_id, currency_text)
     
-    # Save receipt with currency
-    await save_receipt_with_currency(update, context, currency_text)
+    # Store currency in context
+    context.user_data['selected_currency'] = currency_text
+    
+    # Add currency to products
+    products = context.user_data.get('pending_receipt_products', [])
+    for product in products:
+        product['currency'] = currency_text
+    
+    # Display products with currency symbol
+    await display_products_with_actions(update, context, products, currency=currency_text)
     
     context.user_data.pop('waiting_for_custom_currency', None)
-    await update.message.reply_text(f"✅ Валюта {currency_text} сохранена. Чек записан в Google Sheets.")
     return ConversationHandler.END
 
 
@@ -294,7 +335,8 @@ async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
     
     elif callback_data == "action_confirm":
-        # Proceed to currency selection
+        # Save receipt with already selected currency
+        currency = context.user_data.get('selected_currency')
         products = context.user_data.get('pending_receipt_products', [])
         csv_response = context.user_data.get('pending_receipt_csv', '')
         
@@ -302,35 +344,21 @@ async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("❌ Ошибка: данные не найдены.")
             return
         
-        # Get user's currency preferences
-        user_id = update.effective_user.id
-        user_currencies = currency_storage.get_user_currencies(user_id)
+        if not currency:
+            await query.edit_message_text("❌ Ошибка: валюта не выбрана.")
+            return
         
-        # Create keyboard buttons
-        keyboard = []
-        row = []
-        currencies_to_show = user_currencies[:6]
+        # Save receipt with currency
+        await save_receipt_with_currency(update, context, currency)
         
-        for currency in currencies_to_show:
-            row.append(InlineKeyboardButton(currency, callback_data=f"currency_{currency}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        
-        if row:
-            keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("Other", callback_data="currency_other")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "✅ Товары подтверждены.\n\n💱 Пожалуйста, выберите валюту чека:",
-            reply_markup=reply_markup
-        )
+        currency_symbol = currency_storage.get_currency_symbol(currency)
+        await query.edit_message_text(f"✅ Чек сохранен в Google Sheets ({currency_symbol}).")
     
     elif callback_data == "action_cancel":
         # Cancel and clean up
         context.user_data.pop('pending_receipt_csv', None)
         context.user_data.pop('pending_receipt_products', None)
+        context.user_data.pop('selected_currency', None)
         context.user_data.pop('editing_product_idx', None)
         context.user_data.pop('waiting_for_quantity', None)
         context.user_data.pop('waiting_for_price', None)
@@ -351,7 +379,8 @@ async def handle_product_selection(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text("❌ Ошибка: список товаров не найден.")
             return
         
-        readable_message = formatters.format_readable_message(products)
+        currency = context.user_data.get('selected_currency')
+        readable_message = formatters.format_readable_message(products, currency=currency)
         message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
         last_message = message_chunks[-1] if message_chunks else readable_message
         
@@ -433,7 +462,7 @@ async def handle_edit_type_callback(update: Update, context: ContextTypes.DEFAUL
             from io import StringIO
             output = StringIO()
             writer = csv.DictWriter(output, fieldnames=['original_product_name', 'translated_product_name', 
-                                                         'category', 'subcategory', 'price', 'receipt_date'])
+                                                         'category', 'subcategory', 'price', 'receipt_date', 'currency'])
             writer.writeheader()
             for p in products:
                 writer.writerow({
@@ -442,7 +471,8 @@ async def handle_edit_type_callback(update: Update, context: ContextTypes.DEFAUL
                     'category': p.get('category', 'Unknown'),
                     'subcategory': p.get('subcategory', 'Unknown'),
                     'price': p.get('price', '0'),
-                    'receipt_date': p.get('receipt_date', '')
+                    'receipt_date': p.get('receipt_date', ''),
+                    'currency': p.get('currency', '')
                 })
             context.user_data['pending_receipt_csv'] = output.getvalue()
         else:
@@ -486,7 +516,7 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
         from io import StringIO
         output = StringIO()
         writer = csv.DictWriter(output, fieldnames=['original_product_name', 'translated_product_name', 
-                                                     'category', 'subcategory', 'price', 'receipt_date'])
+                                                     'category', 'subcategory', 'price', 'receipt_date', 'currency'])
         writer.writeheader()
         for p in products:
             writer.writerow({
@@ -495,7 +525,8 @@ async def handle_quantity_input(update: Update, context: ContextTypes.DEFAULT_TY
                 'category': p.get('category', 'Unknown'),
                 'subcategory': p.get('subcategory', 'Unknown'),
                 'price': p.get('price', '0'),
-                'receipt_date': p.get('receipt_date', '')
+                'receipt_date': p.get('receipt_date', ''),
+                'currency': p.get('currency', '')
             })
         context.user_data['pending_receipt_csv'] = output.getvalue()
         
@@ -539,7 +570,7 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         from io import StringIO
         output = StringIO()
         writer = csv.DictWriter(output, fieldnames=['original_product_name', 'translated_product_name', 
-                                                     'category', 'subcategory', 'price', 'receipt_date'])
+                                                     'category', 'subcategory', 'price', 'receipt_date', 'currency'])
         writer.writeheader()
         for p in products:
             writer.writerow({
@@ -548,7 +579,8 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 'category': p.get('category', 'Unknown'),
                 'subcategory': p.get('subcategory', 'Unknown'),
                 'price': p.get('price', '0'),
-                'receipt_date': p.get('receipt_date', '')
+                'receipt_date': p.get('receipt_date', ''),
+                'currency': p.get('currency', '')
             })
         context.user_data['pending_receipt_csv'] = output.getvalue()
         
@@ -563,7 +595,8 @@ async def handle_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def show_updated_products_list(query_or_message, context: ContextTypes.DEFAULT_TYPE, products: list):
     """Show updated products list with action buttons"""
-    readable_message = formatters.format_readable_message(products)
+    currency = context.user_data.get('selected_currency')
+    readable_message = formatters.format_readable_message(products, currency=currency)
     message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
     last_message = message_chunks[-1] if message_chunks else readable_message
     
@@ -586,7 +619,8 @@ async def show_updated_products_list(query_or_message, context: ContextTypes.DEF
 
 async def show_updated_products_list_message(message, context: ContextTypes.DEFAULT_TYPE, products: list):
     """Show updated products list with action buttons (for message updates)"""
-    readable_message = formatters.format_readable_message(products)
+    currency = context.user_data.get('selected_currency')
+    readable_message = formatters.format_readable_message(products, currency=currency)
     message_chunks = formatters.split_long_message(readable_message, config.MAX_MESSAGE_LENGTH - 200)
     last_message = message_chunks[-1] if message_chunks else readable_message
     
@@ -653,8 +687,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['pending_receipt_csv'] = csv_response
             context.user_data['pending_receipt_products'] = products
             
-            # Display products with action buttons
-            await display_products_with_actions(update, context, products)
+            # Ask for currency first, before displaying products
+            await ask_for_currency(update, context, csv_response, products)
                 
         except Exception as e:
             logger.error(f"Error handling photo: {e}")

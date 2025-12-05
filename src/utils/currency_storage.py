@@ -14,6 +14,52 @@ CURRENCY_STORAGE_PATH = config.PROJECT_ROOT / 'data' / 'currency_preferences.jso
 DEFAULT_CURRENCIES = ['RSD', 'EUR', 'USD', 'RUB']
 MAX_STORED_CURRENCIES = 6
 
+# Currency code to symbol mapping
+CURRENCY_SYMBOLS = {
+    'RSD': 'дин.',  # Serbian Dinar
+    'EUR': '€',
+    'USD': '$',
+    'RUB': '₽',
+    'GBP': '£',
+    'JPY': '¥',
+    'CNY': '¥',
+    'CHF': 'CHF',
+    'CAD': 'C$',
+    'AUD': 'A$',
+    'NZD': 'NZ$',
+    'SEK': 'kr',
+    'NOK': 'kr',
+    'DKK': 'kr',
+    'PLN': 'zł',
+    'CZK': 'Kč',
+    'HUF': 'Ft',
+    'RON': 'lei',
+    'BGN': 'лв',
+    'HRK': 'kn',
+    'TRY': '₺',
+    'INR': '₹',
+    'KRW': '₩',
+    'SGD': 'S$',
+    'HKD': 'HK$',
+    'MXN': '$',
+    'BRL': 'R$',
+    'ZAR': 'R',
+}
+
+
+def get_currency_symbol(currency_code: str) -> str:
+    """
+    Get currency symbol for a currency code
+    
+    Args:
+        currency_code: Three-letter currency code (e.g., 'USD', 'EUR')
+    
+    Returns:
+        Currency symbol (e.g., '$', '€') or the currency code if symbol not found
+    """
+    currency_code = currency_code.upper().strip()
+    return CURRENCY_SYMBOLS.get(currency_code, currency_code)
+
 
 def load_currency_preferences() -> Dict[int, Dict]:
     """
