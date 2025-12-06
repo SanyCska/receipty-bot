@@ -203,6 +203,14 @@ async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAU
     for product in products:
         product['currency'] = currency
     
+    # Set today's date in YYYY-MM-DD format if receipt_date is missing or empty
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    for product in products:
+        receipt_date = product.get('receipt_date', '').strip()
+        if not receipt_date:
+            product['receipt_date'] = today_date
+            logger.info(f"Set receipt_date to today's date ({today_date}) for product: {product.get('original_product_name', 'Unknown')}")
+    
     # Write to Google Sheets if configured
     if config.GOOGLE_SHEETS_SPREADSHEET_ID:
         try:
