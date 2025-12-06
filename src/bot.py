@@ -12,6 +12,7 @@ from .utils import formatters
 from .utils import telegram_utils
 from .services import gs_service
 from .utils import currency_storage
+from .utils import language_storage
 
 # Configure logging
 logging.basicConfig(
@@ -21,9 +22,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Conversation states
-WAITING_FOR_CURRENCY = 1
-WAITING_FOR_QUANTITY = 2
-WAITING_FOR_PRICE = 3
+WAITING_FOR_LANGUAGE = 1
+WAITING_FOR_CURRENCY = 2
+WAITING_FOR_QUANTITY = 3
+WAITING_FOR_PRICE = 4
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,6 +88,43 @@ async def display_products_with_actions_from_query(query, context: ContextTypes.
     await query.edit_message_text(last_message, reply_markup=reply_markup)
 
 
+async def ask_for_language(update: Update, context: ContextTypes.DEFAULT_TYPE, photos: list):
+    """Ask user to select language for the receipt"""
+    user_id = update.effective_user.id
+    
+    # Get user's language preferences
+    user_languages = language_storage.get_user_languages(user_id)
+    
+    # Create keyboard buttons
+    keyboard = []
+    row = []
+    
+    # Show up to 6 languages (last used first) - this includes defaults if not used yet
+    # We'll arrange them in rows of 2
+    languages_to_show = user_languages[:6]  # Show up to 6 languages
+    
+    for language in languages_to_show:
+        row.append(InlineKeyboardButton(language, callback_data=f"language_{language}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    
+    # Add "Other" button
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("Other", callback_data="language_other")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Store photos in context for later processing
+    context.user_data['pending_receipt_photos'] = photos
+    
+    await update.message.reply_text(
+        "🌐 Пожалуйста, выберите язык чека:",
+        reply_markup=reply_markup
+    )
+
+
 async def ask_for_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, csv_response: str, products: list):
     """Ask user to select currency for the receipt"""
     user_id = update.effective_user.id
@@ -118,10 +157,78 @@ async def ask_for_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, c
     context.user_data['pending_receipt_csv'] = csv_response
     context.user_data['pending_receipt_products'] = products
     
-    await update.message.reply_text(
+    # Get the message object to reply to (works for both callback query and message)
+    message = update.message if update.message else update.callback_query.message
+    
+    await message.reply_text(
         "💱 Пожалуйста, выберите валюту чека:",
         reply_markup=reply_markup
     )
+
+
+async def process_photos_with_language(update: Update, context: ContextTypes.DEFAULT_TYPE, language: str):
+    """Process photos with selected language"""
+    photos = context.user_data.get('pending_receipt_photos', [])
+    
+    if not photos:
+        logger.error("No pending photos found")
+        # Handle both callback query and message
+        if update.callback_query:
+            await update.callback_query.message.reply_text("❌ Ошибка: фотографии не найдены.")
+        elif update.message:
+            await update.message.reply_text("❌ Ошибка: фотографии не найдены.")
+        return
+    
+    # Get the message object to reply to (works for both callback query and message)
+    message = update.message if update.message else update.callback_query.message
+    
+    # Send processing message
+    if len(photos) > 1:
+        await message.reply_text(f"📸 Обрабатываю {len(photos)} фото... Пожалуйста, подождите.")
+    else:
+        await message.reply_text("📸 Обрабатываю фото... Пожалуйста, подождите.")
+    
+    try:
+        logger.info(f"Processing {len(photos)} photos with language: {language}")
+        csv_response = await openai_service.process_receipts(photos, language=language)
+        products = csv_parser.parse_csv(csv_response)
+        
+        # Initialize quantity for each product (default 1 if not present)
+        for product in products:
+            if 'quantity' not in product:
+                product['quantity'] = '1'
+        
+        # Store products and CSV in context
+        context.user_data['pending_receipt_csv'] = csv_response
+        context.user_data['pending_receipt_products'] = products
+        
+        # Clean up photos from context
+        context.user_data.pop('pending_receipt_photos', None)
+        
+        # Ask for currency after processing
+        await ask_for_currency(update, context, csv_response, products)
+            
+    except Exception as e:
+        logger.error(f"Error processing photos with language: {e}")
+        logger.exception("Full error traceback:")
+        
+        # Extract more informative error message
+        error_str = str(e)
+        if "refused" in error_str.lower() or "unable to assist" in error_str.lower():
+            error_message = "❌ Не удалось обработать чек. Модель не смогла прочитать изображение. Попробуйте отправить более четкое фото или другой язык."
+        elif "no products" in error_str.lower() or "csv parsing failed" in error_str.lower():
+            error_message = "❌ Не удалось извлечь данные из чека. Попробуйте отправить более четкое фото или проверьте, что чек читаемый."
+        elif "cannot process images" in error_str.lower():
+            error_message = "❌ Ошибка обработки изображения. Попробуйте отправить фото в формате JPEG или PNG."
+        else:
+            error_message = "❌ Произошла ошибка при обработке чеков. Попробуйте еще раз или проверьте качество фото."
+        
+        # Get the message object to reply to (works for both callback query and message)
+        message = update.message if update.message else update.callback_query.message
+        
+        await message.reply_text(error_message)
+        # Clean up on error
+        context.user_data.pop('pending_receipt_photos', None)
 
 
 async def process_media_group(media_group_id: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,36 +265,11 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
     if num_photos == 0:
         return
     
-    # Send processing message
-    if num_photos > 1:
-        await update.message.reply_text(f"📸 Обрабатываю {num_photos} фото в одном запросе... Пожалуйста, подождите.")
-    else:
-        await update.message.reply_text("📸 Обрабатываю фото... Пожалуйста, подождите.")
+    # Store photos and ask for language first
+    context.user_data['pending_receipt_photos'] = photos_to_process
     
-    try:
-        # Process all photos in one API request
-        logger.info(f"Processing {num_photos} photos in single API request for media_group_id: {media_group_id}")
-        csv_response = await openai_service.process_receipts(photos_to_process)
-        products = csv_parser.parse_csv(csv_response)
-        
-        # Initialize quantity for each product (default 1 if not present)
-        for product in products:
-            if 'quantity' not in product:
-                product['quantity'] = '1'
-        
-        # Store products and CSV in context
-        context.user_data['pending_receipt_csv'] = csv_response
-        context.user_data['pending_receipt_products'] = products
-        
-        # Ask for currency first, before displaying products
-        await ask_for_currency(update, context, csv_response, products)
-            
-    except Exception as e:
-        logger.error(f"Error handling media group: {e}")
-        logger.exception("Full error traceback:")
-        await update.message.reply_text(
-            "❌ Произошла ошибка при обработке чеков. Попробуйте еще раз или проверьте качество фото."
-        )
+    # Ask for language before processing
+    await ask_for_language(update, context, photos_to_process)
 
 
 async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, currency: str):
@@ -238,6 +320,67 @@ async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAU
     # Clean up
     context.user_data.pop('pending_receipt_csv', None)
     context.user_data.pop('pending_receipt_products', None)
+
+
+async def handle_language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle language button callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    if callback_data == "language_other":
+        # User selected "Other", ask for custom language
+        await query.edit_message_text(
+            "🌐 Пожалуйста, введите название языка (например, Italian, Portuguese, Dutch):"
+        )
+        context.user_data['waiting_for_custom_language'] = True
+        return WAITING_FOR_LANGUAGE
+    else:
+        # User selected a predefined language
+        language = callback_data.replace("language_", "")
+        
+        # Save language preference
+        language_storage.add_user_language(user_id, language)
+        
+        # Store language in context
+        context.user_data['selected_language'] = language
+        
+        # Process photos with selected language
+        await query.edit_message_text(f"🌐 Выбран язык: {language}. Обрабатываю фото...")
+        await process_photos_with_language(update, context, language)
+        
+        return ConversationHandler.END
+
+
+async def handle_custom_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom language input"""
+    if not context.user_data.get('waiting_for_custom_language'):
+        return ConversationHandler.END
+    
+    user_id = update.effective_user.id
+    language_text = update.message.text.strip()
+    
+    # Validate language (not empty)
+    if not language_text:
+        await update.message.reply_text(
+            "❌ Неверный формат. Пожалуйста, введите название языка (например, Italian, Portuguese, Dutch):"
+        )
+        return WAITING_FOR_LANGUAGE
+    
+    # Save language preference
+    language_storage.add_user_language(user_id, language_text)
+    
+    # Store language in context
+    context.user_data['selected_language'] = language_text
+    
+    # Process photos with selected language
+    await update.message.reply_text(f"🌐 Выбран язык: {language_text}. Обрабатываю фото...")
+    await process_photos_with_language(update, context, language_text)
+    
+    context.user_data.pop('waiting_for_custom_language', None)
+    return ConversationHandler.END
 
 
 async def handle_currency_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -366,10 +509,13 @@ async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_T
         # Cancel and clean up
         context.user_data.pop('pending_receipt_csv', None)
         context.user_data.pop('pending_receipt_products', None)
+        context.user_data.pop('pending_receipt_photos', None)
         context.user_data.pop('selected_currency', None)
+        context.user_data.pop('selected_language', None)
         context.user_data.pop('editing_product_idx', None)
         context.user_data.pop('waiting_for_quantity', None)
         context.user_data.pop('waiting_for_price', None)
+        context.user_data.pop('waiting_for_custom_language', None)
         await query.edit_message_text("❌ Отменено. Можете отправить новый чек.")
 
 
@@ -678,32 +824,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Added photo to media group {media_group_id}, total: {num_collected}")
             await update.message.reply_text(f"📸 Получено фото {num_collected}...")
     else:
-        # Single photo - process immediately
-        await update.message.reply_text("📸 Обрабатываю фото... Пожалуйста, подождите.")
-        
-        try:
-            logger.info("Processing single photo")
-            csv_response = await openai_service.process_receipts([photo_bytes])
-            products = csv_parser.parse_csv(csv_response)
-            
-            # Initialize quantity for each product (default 1 if not present)
-            for product in products:
-                if 'quantity' not in product:
-                    product['quantity'] = '1'
-            
-            # Store products and CSV in context
-            context.user_data['pending_receipt_csv'] = csv_response
-            context.user_data['pending_receipt_products'] = products
-            
-            # Ask for currency first, before displaying products
-            await ask_for_currency(update, context, csv_response, products)
-                
-        except Exception as e:
-            logger.error(f"Error handling photo: {e}")
-            logger.exception("Full error traceback:")
-            await update.message.reply_text(
-                "❌ Произошла ошибка при обработке чека. Попробуйте еще раз или проверьте качество фото."
-            )
+        # Single photo - ask for language first
+        await ask_for_language(update, context, [photo_bytes])
 
 
 def main():
@@ -721,6 +843,15 @@ def main():
     # Create application
     try:
         application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        
+        # Create conversation handler for language selection
+        language_conv_handler = ConversationHandler(
+            entry_points=[CallbackQueryHandler(handle_language_callback, pattern="^language_")],
+            states={
+                WAITING_FOR_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_language)],
+            },
+            fallbacks=[],
+        )
         
         # Create conversation handler for currency selection
         currency_conv_handler = ConversationHandler(
@@ -750,6 +881,7 @@ def main():
         application.add_handler(CallbackQueryHandler(handle_action_callback, pattern="^action_"))
         application.add_handler(edit_conv_handler)
         application.add_handler(currency_conv_handler)
+        application.add_handler(language_conv_handler)
         
         # Start bot
         logger.info("Bot started successfully")

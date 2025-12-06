@@ -198,6 +198,27 @@ async def _process_receipts_with_prompt(photos: List[bytes], prompt: str, attemp
         logger.error(f"Message structure had {len(image_contents)} image(s)")
         raise ValueError(f"Model cannot process images. Response: {raw_response[:200]}")
     
+    # Check for refusal messages (common patterns when model refuses to process)
+    refusal_keywords = [
+        "unable to assist",
+        "cannot assist",
+        "i'm unable",
+        "i cannot",
+        "i can't",
+        "not able to",
+        "cannot help",
+        "unable to help",
+        "my capabilities are limited",
+        "as per the rules",
+        "i apologize, but",
+        "i'm sorry, but"
+    ]
+    raw_lower = raw_response.lower()
+    if any(keyword in raw_lower for keyword in refusal_keywords):
+        logger.error(f"[Attempt {attempt_num}] OpenAI model refused to process the request!")
+        logger.error(f"Refusal response: {raw_response[:500]}")
+        raise ValueError(f"Model refused to process request. Response: {raw_response[:200]}")
+    
     logger.info(f"[Attempt {attempt_num}] OpenAI API response received:")
     logger.info(f"  Model: {response.model}")
     logger.info(f"  Usage: {response.usage}")
@@ -221,13 +242,32 @@ async def _process_receipts_with_prompt(photos: List[bytes], prompt: str, attemp
     # Clean CSV to ensure all fields are properly quoted (handles commas in product names)
     csv_response = csv_parser.clean_csv(csv_response)
     
+    # Validate that CSV can be parsed into products (this is the real validation)
+    # Try parsing first to see if we get valid products
+    products = csv_parser.parse_csv(csv_response)
+    if not products or len(products) == 0:
+        # If parsing failed, check if it's because of missing header or invalid structure
+        lines = csv_response.strip().split('\n')
+        has_data = len(lines) > 0 and any(',' in line and line.count(',') >= 3 for line in lines)
+        
+        if not has_data:
+            logger.error(f"[Attempt {attempt_num}] CSV has no data rows!")
+            logger.error(f"CSV content: {csv_response[:500]}")
+            raise ValueError(f"Response does not contain valid CSV data. Response preview: {raw_response[:200]}")
+        else:
+            logger.error(f"[Attempt {attempt_num}] CSV parsing returned no products despite having data rows!")
+            logger.error(f"CSV content: {csv_response[:500]}")
+            raise ValueError(f"CSV parsing failed - no products extracted. Response preview: {raw_response[:200]}")
+    
+    logger.info(f"[Attempt {attempt_num}] Validated CSV: {len(products)} products extracted")
+    
     # Save CSV to file
     save_csv_response(csv_response)
     
     return csv_response
 
 
-async def process_receipts(photos: List[bytes]) -> str:
+async def process_receipts(photos: List[bytes], language: str = "serbian") -> str:
     """Send photos to OpenAI API and get CSV response with retry logic using alternative prompts"""
     # Validate photos
     if not photos or len(photos) == 0:
@@ -244,8 +284,8 @@ async def process_receipts(photos: List[bytes]) -> str:
     
     for attempt_num, (prompt_name, prompt_func) in enumerate(prompt_functions, start=1):
         try:
-            logger.info(f"Attempting receipt processing with {prompt_name} prompt (attempt {attempt_num}/3)")
-            prompt = prompt_func()
+            logger.info(f"Attempting receipt processing with {prompt_name} prompt (attempt {attempt_num}/3), language: {language}")
+            prompt = prompt_func(language=language)
             csv_response = await _process_receipts_with_prompt(photos, prompt, attempt_num)
             logger.info(f"Successfully processed receipts with {prompt_name} prompt on attempt {attempt_num}")
             return csv_response

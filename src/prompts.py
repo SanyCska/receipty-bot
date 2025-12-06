@@ -16,13 +16,13 @@ def load_categories() -> str:
         return ""
 
 
-def get_prompt() -> str:
+def get_prompt(language: str = "serbian") -> str:
     """Get the prompt for OpenAI API"""
     categories_csv = load_categories()
 
-    prompt = """You are analyzing one or more supermarket receipts (non-personal, sample data only).
+    prompt = f"""You are analyzing one or more supermarket receipts (non-personal, sample data only).
     
-    Receipts will be on serbian language.
+    Receipts will be on {language.lower()} language.
 
     TASK:
     1. Read the attached receipt images using your vision capabilities.
@@ -65,13 +65,13 @@ def get_prompt() -> str:
     return prompt
 
 
-def get_prompt_retry_1() -> str:
+def get_prompt_retry_1(language: str = "serbian") -> str:
     """Get the first retry prompt for OpenAI API"""
     categories_csv = load_categories()
     
-    prompt = """You are analyzing a supermarket receipts image.
+    prompt = f"""You are analyzing a supermarket receipts image.
 
-Receipts will be on serbian language 
+Receipts will be on {language.lower()} language 
 
 STRICT TASK:
 
@@ -128,11 +128,12 @@ Categories reference (for classification assistance):
     return prompt
 
 
-def get_prompt_retry_2() -> str:
+def get_prompt_retry_2(language: str = "serbian") -> str:
     """Get the second retry prompt for OpenAI API"""
     categories_csv = load_categories()
     
-    prompt = """You are analyzing a receipt image.
+    prompt = f"""You are analyzing a receipt image.
+    Receipts will be on {language.lower()} language.
 
 TASK:
 
