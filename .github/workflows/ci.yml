@@ -201,12 +201,23 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
             cd ${{ secrets.SERVER_PATH }}
             
-            # Start bot container
-            echo "Starting bot container..."
+            # Stop and remove old bot container
+            echo "Stopping old bot container..."
+            docker compose stop receipty-bot || true
+            docker compose rm -f receipty-bot || true
+            
+            # Build new image with latest code
+            echo "Building new bot image..."
+            docker compose build receipty-bot
+            
+            # Start bot container with new image
+            echo "Starting bot container with new image..."
             docker compose up -d receipty-bot
             
             echo "Deployment complete!"
             docker compose ps
+            echo "Bot logs (last 20 lines):"
+            docker compose logs --tail=20 receipty-bot
           EOF
       
       - name: Cleanup SSH key
