@@ -114,7 +114,7 @@ ssh SERVER_USER@SERVER_HOST
      - Если нет - создает базу данных и инициализирует таблицы
      - Если да - пропускает инициализацию
    - Запускает контейнер бота с переменными окружения
-   - Использует docker-compose для управления контейнерами
+   - Использует docker compose для управления контейнерами
 
 ## Устранение неполадок:
 
@@ -168,7 +168,7 @@ ls -la ~/.ssh/
 - Файл `config/gs_creds.json` должен быть скопирован на сервер вручную перед первым запуском
 - **SSH ключи работают БЕЗ пароля** - если требуется пароль, значит ключ не настроен правильно
 - База данных PostgreSQL будет автоматически создана и инициализирована при первом деплое
-- Данные базы данных сохраняются в Docker volume `postgres_data` и не удаляются при перезапуске контейнеров
+- Данные базы данных сохраняются в Docker volume `receipty_bot_postgres_data` и не удаляются при перезапуске контейнеров
 
 ## Локальный запуск с Docker Compose:
 
@@ -180,32 +180,32 @@ cp env_template.txt .env
 # Отредактируйте .env и добавьте ваши значения
 
 # Запустите контейнеры
-docker-compose up -d
+docker compose up -d
 
 # Инициализируйте базу данных (если еще не сделано)
-docker-compose run --rm receipty-bot python init_db.py
+docker compose run --rm receipty-bot python init_db.py
 
 # Проверьте статус
-docker-compose ps
+docker compose ps
 
 # Просмотрите логи
-docker-compose logs -f receipty-bot
-docker-compose logs -f postgres
+docker compose logs -f receipty-bot
+docker compose logs -f postgres
 ```
 
 ## Управление базой данных:
 
 ```bash
 # Подключиться к PostgreSQL
-docker-compose exec postgres psql -U postgres -d receipty_bot
+docker compose exec postgres psql -U postgres -d receipty_bot
 
 # Просмотреть таблицы
-docker-compose exec postgres psql -U postgres -d receipty_bot -c "\dt"
+docker compose exec postgres psql -U postgres -d receipty_bot -c "\dt"
 
 # Остановить контейнеры
-docker-compose down
+docker compose down
 
 # Остановить и удалить данные базы (ОСТОРОЖНО!)
-docker-compose down -v
+docker compose down -v
 ```
 

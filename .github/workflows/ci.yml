@@ -130,22 +130,22 @@ jobs:
           # Copy files to server
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r * ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/
           
-          # Deploy using docker-compose on server
+          # Deploy using docker compose on server
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << EOF
             cd ${{ secrets.SERVER_PATH }}
             
             # Stop and remove old containers if they exist
-            docker-compose down || true
+            docker compose down || true
             
             # Start PostgreSQL container first
             echo "Starting PostgreSQL container..."
-            docker-compose up -d postgres
+            docker compose up -d postgres
             
             # Wait for PostgreSQL to be ready
             echo "Waiting for PostgreSQL to be ready..."
             timeout=60
             counter=0
-            while ! docker-compose exec -T postgres pg_isready -U "$DB_USER" > /dev/null 2>&1; do
+            while ! docker compose exec -T postgres pg_isready -U "$DB_USER" > /dev/null 2>&1; do
               if [ \$counter -ge \$timeout ]; then
                 echo "PostgreSQL failed to start within \$timeout seconds"
                 exit 1
@@ -158,16 +158,16 @@ jobs:
             # Check if database exists, create and initialize if not
             echo "Checking database..."
             # Connect to default 'postgres' database to check if target database exists
-            DB_EXISTS=\$(docker-compose exec -T postgres psql -U "$DB_USER" -d postgres -lqt | cut -d \| -f 1 | grep -w "$DB_NAME" | wc -l)
+            DB_EXISTS=\$(docker compose exec -T postgres psql -U "$DB_USER" -d postgres -lqt | cut -d \| -f 1 | grep -w "$DB_NAME" | wc -l)
             
             if [ "\$DB_EXISTS" -eq 0 ]; then
               echo "Database '$DB_NAME' does not exist. Creating..."
-              docker-compose exec -T postgres psql -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;"
+              docker compose exec -T postgres psql -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;"
               echo "Database '$DB_NAME' created successfully!"
               
               # Initialize database tables
               echo "Initializing database tables..."
-              docker-compose run --rm receipty-bot python init_db.py
+              docker compose run --rm receipty-bot python init_db.py
               echo "Database initialized!"
             else
               echo "Database '$DB_NAME' already exists. Skipping initialization."
@@ -175,10 +175,10 @@ jobs:
             
             # Start bot container
             echo "Starting bot container..."
-            docker-compose up -d receipty-bot
+            docker compose up -d receipty-bot
             
             echo "Deployment complete!"
-            docker-compose ps
+            docker compose ps
           EOF
       
       - name: Cleanup SSH key
