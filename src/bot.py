@@ -11,6 +11,7 @@ from .services import openai_service
 from .utils import formatters
 from .utils import telegram_utils
 from .services import gs_service
+from .services import db_service
 from .utils import currency_storage
 from .utils import language_storage
 
@@ -273,7 +274,7 @@ async def process_media_group(media_group_id: str, update: Update, context: Cont
 
 
 async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAULT_TYPE, currency: str):
-    """Save receipt to Google Sheets with currency"""
+    """Save receipt to Google Sheets and database with currency"""
     csv_response = context.user_data.get('pending_receipt_csv')
     products = context.user_data.get('pending_receipt_products')
     
@@ -293,7 +294,11 @@ async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAU
             product['receipt_date'] = today_date
             logger.info(f"Set receipt_date to today's date ({today_date}) for product: {product.get('original_product_name', 'Unknown')}")
     
+    # Get user ID for database operations
+    user_id = update.effective_user.id
+    
     # Write to Google Sheets if configured
+    gs_success = False
     if config.GOOGLE_SHEETS_SPREADSHEET_ID:
         try:
             gs_service.write_products_to_sheet(
@@ -302,20 +307,40 @@ async def save_receipt_with_currency(update: Update, context: ContextTypes.DEFAU
                 config.GOOGLE_SHEETS_TAB_NAME
             )
             logger.info(f"Successfully wrote data to Google Sheets with currency {currency}")
+            gs_success = True
         except Exception as gs_error:
             logger.error(f"Error writing to Google Sheets: {gs_error}")
             logger.exception("Google Sheets error traceback:")
-            # Send error message based on update type
-            if update.callback_query:
-                await update.callback_query.message.reply_text(
-                    "❌ Ошибка при сохранении в Google Sheets, но валюта сохранена."
-                )
-            elif update.message:
-                await update.message.reply_text(
-                    "❌ Ошибка при сохранении в Google Sheets, но валюта сохранена."
-                )
+    
+    # Write to database
+    db_success = False
+    try:
+        db_success = db_service.save_products_to_db(user_id, products)
+        if db_success:
+            logger.info(f"Successfully saved data to database with currency {currency}")
+    except Exception as db_error:
+        logger.error(f"Error writing to database: {db_error}")
+        logger.exception("Database error traceback:")
+    
+    # Send appropriate message based on results
+    message_parts = []
+    if gs_success:
+        message_parts.append("Google Sheets")
+    if db_success:
+        message_parts.append("базу данных")
+    
+    if message_parts:
+        success_message = f"✅ Чек сохранен в {', '.join(message_parts)}."
+        if update.callback_query:
+            await update.callback_query.message.reply_text(success_message)
+        elif update.message:
+            await update.message.reply_text(success_message)
     else:
-        logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID not configured, skipping Google Sheets write")
+        error_message = "❌ Ошибка при сохранении данных."
+        if update.callback_query:
+            await update.callback_query.message.reply_text(error_message)
+        elif update.message:
+            await update.message.reply_text(error_message)
     
     # Clean up
     context.user_data.pop('pending_receipt_csv', None)
@@ -502,8 +527,8 @@ async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_T
         # Save receipt with currency
         await save_receipt_with_currency(update, context, currency)
         
-        currency_symbol = currency_storage.get_currency_symbol(currency)
-        await query.edit_message_text(f"✅ Чек сохранен в Google Sheets ({currency_symbol}).")
+        # Note: success message is already sent in save_receipt_with_currency
+        await query.edit_message_text("✅ Обработка завершена.")
     
     elif callback_data == "action_cancel":
         # Cancel and clean up

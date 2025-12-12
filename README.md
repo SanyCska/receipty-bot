@@ -13,7 +13,8 @@ receipty-bot/
 │   ├── prompts.py             # Prompt templates and category loading
 │   ├── services/              # API service integrations
 │   │   ├── openai_service.py  # OpenAI API interactions
-│   │   └── gs_service.py      # Google Sheets integration
+│   │   ├── gs_service.py      # Google Sheets integration
+│   │   └── db_service.py      # PostgreSQL database integration
 │   └── utils/                 # Utility modules
 │       ├── csv_parser.py      # CSV extraction and parsing utilities
 │       ├── formatters.py      # Message formatting utilities
@@ -25,6 +26,7 @@ receipty-bot/
 ├── output/                    # Output files
 │   └── receipts_csv/          # Generated receipt CSV files
 ├── requirements.txt           # Python dependencies
+├── init_db.py                 # Database initialization script
 └── README.md                  # This file
 ```
 
@@ -35,6 +37,7 @@ receipty-bot/
 - **`src/config.py`**: All configuration constants, paths, and settings
 - **`src/services/openai_service.py`**: OpenAI API client, image processing, and receipt analysis
 - **`src/services/gs_service.py`**: Google Sheets integration for saving receipt data
+- **`src/services/db_service.py`**: PostgreSQL database integration for saving receipt data
 - **`src/utils/csv_parser.py`**: Functions for extracting CSV from API responses and parsing CSV data
 - **`src/utils/formatters.py`**: Message formatting for user-friendly output
 - **`src/utils/telegram_utils.py`**: Telegram-specific utilities like photo downloading
@@ -48,6 +51,7 @@ receipty-bot/
 - 🌍 Product name translation to Russian
 - 💰 Price extraction and validation
 - 📈 Optional Google Sheets integration for data storage
+- 🗄️ PostgreSQL database integration for data storage
 
 ## Setup
 
@@ -75,7 +79,37 @@ receipty-bot/
      GOOGLE_SHEETS_TAB_NAME=november_2025  # Optional, defaults to november_2025
      ```
 
-5. **Set up Google Sheets integration (Optional):**
+5. **Set up PostgreSQL database:**
+   - Install PostgreSQL if you haven't already:
+     - macOS: `brew install postgresql` or download from [PostgreSQL website](https://www.postgresql.org/download/)
+     - Linux: `sudo apt-get install postgresql` (Ubuntu/Debian) or use your distribution's package manager
+     - Windows: Download installer from [PostgreSQL website](https://www.postgresql.org/download/windows/)
+   - Create a database:
+     ```bash
+     createdb receipty_bot
+     ```
+     Or using psql:
+     ```bash
+     psql -U postgres
+     CREATE DATABASE receipty_bot;
+     ```
+   - Add database credentials to your `.env` file:
+     ```
+     DB_HOST=localhost
+     DB_PORT=5432
+     DB_NAME=receipty_bot
+     DB_USER=postgres
+     DB_PASSWORD=your_db_password_here
+     ```
+   - Initialize the database tables:
+     ```bash
+     python init_db.py
+     ```
+     This will create two tables:
+     - `user`: Stores Telegram user IDs
+     - `products`: Stores receipt products with connection to users
+
+6. **Set up Google Sheets integration (Optional):**
    - If you want to save receipt data to Google Sheets:
      1. Go to [Google Cloud Console](https://console.cloud.google.com/)
      2. Create a new project or select an existing one
@@ -92,7 +126,7 @@ receipty-bot/
      6. Save the downloaded JSON file as `config/gs_creds.json`
      7. Share your Google Sheet with the service account email (found in the JSON file)
      8. Add `GOOGLE_SHEETS_SPREADSHEET_ID` to your `.env` file with your spreadsheet ID
-   - **Note:** If you skip this step, the bot will still work but won't save data to Google Sheets
+   - **Note:** If you skip this step, the bot will still work but won't save data to Google Sheets. Products will still be saved to the database.
 
 ## Usage
 
@@ -115,8 +149,9 @@ receipty-bot/
 4. OpenAI extracts products, prices, and categorizes them
 5. Bot formats the response and sends it back to the user
 6. All CSV responses from OpenAI are saved to `output/receipts_csv/` folder with timestamps
-7. If Google Sheets is configured, data is automatically saved to the specified spreadsheet
-8. Full API responses are logged for debugging
+7. Products are automatically saved to PostgreSQL database (user and products tables)
+8. If Google Sheets is configured, data is also saved to the specified spreadsheet
+9. Full API responses are logged for debugging
 
 ## Categories
 

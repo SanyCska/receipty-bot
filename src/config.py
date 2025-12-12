@@ -37,3 +37,10 @@ MAX_MESSAGE_LENGTH = 4000  # Telegram message limit
 GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv('GOOGLE_SHEETS_SPREADSHEET_ID')
 GOOGLE_SHEETS_TAB_NAME = os.getenv('GOOGLE_SHEETS_TAB_NAME', 'november_2025')
 
+# Database Settings
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME', 'receipty_bot')
+DB_USER = os.getenv('DB_USER', 'postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+
