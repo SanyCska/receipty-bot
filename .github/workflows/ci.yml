@@ -164,11 +164,16 @@ jobs:
               echo "Database '$DB_NAME' already exists."
             fi
             
-            # Check if tables exist (check for 'user' table)
+            # Check if tables exist (check for 'user' and 'products' tables)
             echo "Checking if database is initialized..."
-            TABLES_EXIST=\$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('user', 'products');" 2>/dev/null || echo "0")
+            # Check for 'user' table (quoted because it's a reserved word)
+            USER_TABLE_EXISTS=\$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='user';" 2>/dev/null | tr -d '[:space:]' || echo "0")
+            # Check for 'products' table
+            PRODUCTS_TABLE_EXISTS=\$(docker compose exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='products';" 2>/dev/null | tr -d '[:space:]' || echo "0")
             
-            if [ "\$TABLES_EXIST" -lt "2" ]; then
+            echo "User table exists: \$USER_TABLE_EXISTS, Products table exists: \$PRODUCTS_TABLE_EXISTS"
+            
+            if [ "\$USER_TABLE_EXISTS" -eq "0" ] || [ "\$PRODUCTS_TABLE_EXISTS" -eq "0" ]; then
               echo "Database tables not found or incomplete. Initializing..."
               docker compose run --rm receipty-bot python init_db.py
               echo "Database initialized!"
