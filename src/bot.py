@@ -14,6 +14,7 @@ from .services import gs_service
 from .services import db_service
 from .utils import currency_storage
 from .utils import language_storage
+from . import prompts
 
 # Configure logging
 logging.basicConfig(
@@ -27,14 +28,47 @@ WAITING_FOR_LANGUAGE = 1
 WAITING_FOR_CURRENCY = 2
 WAITING_FOR_QUANTITY = 3
 WAITING_FOR_PRICE = 4
+WAITING_FOR_PRODUCT_NAME = 5
+WAITING_FOR_PRODUCT_CATEGORY = 6
+WAITING_FOR_PRODUCT_SUBCATEGORY = 7
+WAITING_FOR_PRODUCT_PRICE = 8
+WAITING_FOR_PRODUCT_CURRENCY = 9
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
+    keyboard = [
+        [InlineKeyboardButton("📋 Все команды", callback_data="show_commands")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
         "👋 Привет! Отправьте мне фотографии чеков из магазина, и я обработаю их.\n\n"
-        "Просто отправьте одну или несколько фотографий чеков."
+        "Просто отправьте одну или несколько фотографий чеков.",
+        reply_markup=reply_markup
     )
+
+
+async def show_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all available commands"""
+    commands_text = (
+        "📋 Доступные команды:\n\n"
+        "/start - Начать работу с ботом\n"
+        "/add_product - Добавить товар вручную\n"
+        "/help - Показать эту справку\n\n"
+        "💡 Вы также можете просто отправить фото чека для автоматической обработки."
+    )
+    
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(commands_text)
+    elif update.message:
+        await update.message.reply_text(commands_text)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
+    await show_commands(update, context)
 
 
 async def display_products_with_actions(update: Update, context: ContextTypes.DEFAULT_TYPE, products: list, currency: str = None):
@@ -815,6 +849,307 @@ async def show_updated_products_list_message(message, context: ContextTypes.DEFA
     await message.reply_text(last_message, reply_markup=reply_markup)
 
 
+async def add_product_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /add_product command - start manual product entry"""
+    await update.message.reply_text(
+        "➕ Добавление товара вручную\n\n"
+        "Введите название товара:"
+    )
+    context.user_data['adding_product'] = True
+    return WAITING_FOR_PRODUCT_NAME
+
+
+async def handle_product_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle product name input"""
+    if not context.user_data.get('adding_product'):
+        return ConversationHandler.END
+    
+    product_name = update.message.text.strip()
+    if not product_name:
+        await update.message.reply_text("❌ Название товара не может быть пустым. Введите название товара:")
+        return WAITING_FOR_PRODUCT_NAME
+    
+    # Store product name and set translation to the same value
+    context.user_data['manual_product'] = {
+        'original_product_name': product_name,
+        'translated_product_name': product_name,
+        'quantity': '1',
+        'receipt_date': datetime.now().strftime("%Y-%m-%d")
+    }
+    
+    # Get all categories and create buttons
+    categories = prompts.get_category_list()
+    
+    if not categories:
+        # Fallback if categories can't be loaded
+        context.user_data['manual_product']['category'] = 'Unknown'
+        context.user_data['manual_product']['subcategory'] = 'Unknown'
+        await update.message.reply_text(
+            f"✅ Название: {product_name}\n\n"
+            "Введите цену товара (например, 100.50):"
+        )
+        return WAITING_FOR_PRODUCT_PRICE
+    
+    # Create keyboard buttons for categories (one per row)
+    keyboard = []
+    for category in categories:
+        keyboard.append([InlineKeyboardButton(category, callback_data=f"manual_category_{category}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"✅ Название: {product_name}\n\n"
+        "📂 Выберите категорию:",
+        reply_markup=reply_markup
+    )
+    return WAITING_FOR_PRODUCT_CATEGORY
+
+
+async def handle_manual_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle category selection for manual product entry"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not context.user_data.get('adding_product'):
+        return ConversationHandler.END
+    
+    callback_data = query.data
+    category = callback_data.replace("manual_category_", "")
+    
+    # Store selected category
+    context.user_data['manual_product']['category'] = category
+    
+    # Get subcategories for this category
+    subcategories = prompts.get_subcategories_for_category(category)
+    
+    if not subcategories:
+        # No subcategories found, set to Unknown and continue to price
+        context.user_data['manual_product']['subcategory'] = 'Unknown'
+        await query.edit_message_text(
+            f"✅ Категория: {category}\n\n"
+            "Введите цену товара (например, 100.50):"
+        )
+        return WAITING_FOR_PRODUCT_PRICE
+    
+    # Create keyboard buttons for subcategories (one per row)
+    keyboard = []
+    for subcategory in subcategories:
+        keyboard.append([InlineKeyboardButton(subcategory, callback_data=f"manual_subcategory_{subcategory}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"✅ Категория: {category}\n\n"
+        "📁 Выберите подкатегорию:",
+        reply_markup=reply_markup
+    )
+    return WAITING_FOR_PRODUCT_SUBCATEGORY
+
+
+async def handle_manual_subcategory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle subcategory selection for manual product entry"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not context.user_data.get('adding_product'):
+        return ConversationHandler.END
+    
+    callback_data = query.data
+    subcategory = callback_data.replace("manual_subcategory_", "")
+    
+    # Store selected subcategory
+    context.user_data['manual_product']['subcategory'] = subcategory
+    
+    category = context.user_data['manual_product'].get('category', 'Unknown')
+    
+    await query.edit_message_text(
+        f"✅ Категория: {category}\n"
+        f"✅ Подкатегория: {subcategory}\n\n"
+        "Введите цену товара (например, 100.50):"
+    )
+    return WAITING_FOR_PRODUCT_PRICE
+
+
+async def handle_product_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle product price input"""
+    if not context.user_data.get('adding_product'):
+        return ConversationHandler.END
+    
+    try:
+        price = float(update.message.text.strip().replace(',', '.'))
+        if price < 0:
+            await update.message.reply_text("❌ Цена не может быть отрицательной. Введите цену товара:")
+            return WAITING_FOR_PRODUCT_PRICE
+        
+        context.user_data['manual_product']['price'] = str(price)
+        
+        # Get user's currency preferences
+        user_id = update.effective_user.id
+        user_currencies = currency_storage.get_user_currencies(user_id)
+        
+        # Create keyboard buttons
+        keyboard = []
+        row = []
+        
+        # Show up to 6 currencies (last used first)
+        currencies_to_show = user_currencies[:6]
+        
+        for currency in currencies_to_show:
+            row.append(InlineKeyboardButton(currency, callback_data=f"manual_currency_{currency}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        
+        # Add "Other" button
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("Other", callback_data="manual_currency_other")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Цена: {price}\n\n"
+            "💱 Выберите валюту:",
+            reply_markup=reply_markup
+        )
+        return WAITING_FOR_PRODUCT_CURRENCY
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат. Введите число (например, 100.50):")
+        return WAITING_FOR_PRODUCT_PRICE
+
+
+async def handle_manual_currency_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle currency selection for manual product entry"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not context.user_data.get('adding_product'):
+        return ConversationHandler.END
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    if callback_data == "manual_currency_other":
+        # User selected "Other", ask for custom currency
+        await query.edit_message_text(
+            "💱 Пожалуйста, введите трехбуквенный код валюты (например, GBP, JPY, CNY):"
+        )
+        context.user_data['waiting_for_manual_currency'] = True
+        return WAITING_FOR_PRODUCT_CURRENCY
+    else:
+        # User selected a predefined currency
+        currency = callback_data.replace("manual_currency_", "").upper()
+        
+        # Save currency preference
+        currency_storage.add_user_currency(user_id, currency)
+        
+        # Add currency to product and save
+        context.user_data['manual_product']['currency'] = currency
+        await save_manual_product(update, context)
+        
+        return ConversationHandler.END
+
+
+async def handle_manual_currency_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom currency input for manual product"""
+    if not context.user_data.get('waiting_for_manual_currency'):
+        return ConversationHandler.END
+    
+    user_id = update.effective_user.id
+    currency_text = update.message.text.strip().upper()
+    
+    # Validate currency code (3 letters)
+    if len(currency_text) != 3 or not currency_text.isalpha():
+        await update.message.reply_text(
+            "❌ Неверный формат. Пожалуйста, введите трехбуквенный код валюты (например, GBP, JPY, CNY):"
+        )
+        return WAITING_FOR_PRODUCT_CURRENCY
+    
+    # Save currency preference
+    currency_storage.add_user_currency(user_id, currency_text)
+    
+    # Add currency to product and save
+    context.user_data['manual_product']['currency'] = currency_text
+    context.user_data.pop('waiting_for_manual_currency', None)
+    await save_manual_product(update, context)
+    
+    return ConversationHandler.END
+
+
+async def save_manual_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save manually entered product to database and Google Sheets"""
+    product = context.user_data.get('manual_product')
+    
+    if not product:
+        logger.error("No manual product data found")
+        error_message = "❌ Ошибка: данные товара не найдены."
+        if update.callback_query:
+            await update.callback_query.message.reply_text(error_message)
+        elif update.message:
+            await update.message.reply_text(error_message)
+        return
+    
+    # Create products list (single product)
+    products = [product]
+    
+    # Get user ID for database operations
+    user_id = update.effective_user.id
+    
+    # Write to Google Sheets if configured
+    gs_success = False
+    if config.GOOGLE_SHEETS_SPREADSHEET_ID:
+        try:
+            gs_service.write_products_to_sheet(
+                products,
+                config.GOOGLE_SHEETS_SPREADSHEET_ID,
+                config.GOOGLE_SHEETS_TAB_NAME
+            )
+            logger.info(f"Successfully wrote manual product to Google Sheets")
+            gs_success = True
+        except Exception as gs_error:
+            logger.error(f"Error writing to Google Sheets: {gs_error}")
+            logger.exception("Google Sheets error traceback:")
+    
+    # Write to database
+    db_success = False
+    try:
+        db_success = db_service.save_products_to_db(user_id, products)
+        if db_success:
+            logger.info(f"Successfully saved manual product to database")
+    except Exception as db_error:
+        logger.error(f"Error writing to database: {db_error}")
+        logger.exception("Database error traceback:")
+    
+    # Send appropriate message based on results
+    message_parts = []
+    if gs_success:
+        message_parts.append("Google Sheets")
+    if db_success:
+        message_parts.append("базу данных")
+    
+    product_name = product.get('original_product_name', 'Товар')
+    currency = product.get('currency', '')
+    price = product.get('price', '0')
+    
+    if message_parts:
+        success_message = (
+            f"✅ Товар '{product_name}' сохранен в {', '.join(message_parts)}.\n\n"
+            f"💰 Цена: {price} {currency}\n"
+            f"📅 Дата: {product.get('receipt_date', '')}"
+        )
+    else:
+        success_message = "❌ Ошибка при сохранении товара."
+    
+    if update.callback_query:
+        await update.callback_query.message.reply_text(success_message)
+    elif update.message:
+        await update.message.reply_text(success_message)
+    
+    # Clean up
+    context.user_data.pop('manual_product', None)
+    context.user_data.pop('adding_product', None)
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photo messages"""
     media_group_id = update.message.media_group_id
@@ -899,8 +1234,27 @@ def main():
             fallbacks=[],
         )
         
+        # Create conversation handler for manual product entry
+        manual_product_conv_handler = ConversationHandler(
+            entry_points=[CommandHandler("add_product", add_product_command)],
+            states={
+                WAITING_FOR_PRODUCT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_product_name_input)],
+                WAITING_FOR_PRODUCT_CATEGORY: [CallbackQueryHandler(handle_manual_category_callback, pattern="^manual_category_")],
+                WAITING_FOR_PRODUCT_SUBCATEGORY: [CallbackQueryHandler(handle_manual_subcategory_callback, pattern="^manual_subcategory_")],
+                WAITING_FOR_PRODUCT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_product_price_input)],
+                WAITING_FOR_PRODUCT_CURRENCY: [
+                    CallbackQueryHandler(handle_manual_currency_callback, pattern="^manual_currency_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manual_currency_input)
+                ],
+            },
+            fallbacks=[],
+        )
+        
         # Add handlers (order matters - more specific patterns first)
         application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CallbackQueryHandler(show_commands, pattern="^show_commands$"))
+        application.add_handler(manual_product_conv_handler)
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         application.add_handler(CallbackQueryHandler(handle_product_selection, pattern="^edit_product_|^action_back_to_list$|^action_back_to_products$"))
         application.add_handler(CallbackQueryHandler(handle_action_callback, pattern="^action_"))

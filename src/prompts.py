@@ -1,6 +1,8 @@
 """Prompt templates and category loading"""
 import logging
+import csv
 from pathlib import Path
+from typing import Dict, List
 from . import config
 
 logger = logging.getLogger(__name__)
@@ -14,6 +16,41 @@ def load_categories() -> str:
     except Exception as e:
         logger.error(f"Error loading categories: {e}")
         return ""
+
+
+def load_categories_dict() -> Dict[str, List[str]]:
+    """
+    Load categories from CSV file and return as dictionary
+    Returns: Dict with category_group as key and list of subcategories as value
+    """
+    categories_dict = {}
+    try:
+        with open(config.RECEIPT_CATEGORIES_PATH, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                category = row.get('category_group', '').strip()
+                subcategory = row.get('subcategory', '').strip()
+                if category and subcategory:
+                    if category not in categories_dict:
+                        categories_dict[category] = []
+                    if subcategory not in categories_dict[category]:
+                        categories_dict[category].append(subcategory)
+        return categories_dict
+    except Exception as e:
+        logger.error(f"Error loading categories dictionary: {e}")
+        return {}
+
+
+def get_category_list() -> List[str]:
+    """Get list of all unique categories"""
+    categories_dict = load_categories_dict()
+    return sorted(categories_dict.keys())
+
+
+def get_subcategories_for_category(category: str) -> List[str]:
+    """Get list of subcategories for a given category"""
+    categories_dict = load_categories_dict()
+    return sorted(categories_dict.get(category, []))
 
 
 def get_prompt(language: str = "serbian") -> str:
