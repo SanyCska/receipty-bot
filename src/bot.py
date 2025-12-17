@@ -644,6 +644,15 @@ async def handle_edit_type_callback(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
     
+    # Make sure manual add-product conversation (if any) does not interfere
+    # with the edit flow. If user previously started /add_product and did not
+    # finish it, we explicitly disable that mode here so that text input for
+    # price/quantity is not treated as a new manual product name.
+    if context.user_data.get('adding_product'):
+        context.user_data.pop('adding_product', None)
+        context.user_data.pop('manual_product', None)
+        context.user_data.pop('waiting_for_manual_currency', None)
+    
     callback_data = query.data
     products = context.user_data.get('pending_receipt_products', [])
     product_idx = context.user_data.get('editing_product_idx')
