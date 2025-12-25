@@ -179,6 +179,11 @@ def save_products_to_db(telegram_id: int, products: List[Dict[str, str]]) -> boo
                 
                 # Create one row per quantity unit
                 for _ in range(int(quantity)):
+                    # Handle receipt_date - convert empty strings to None
+                    receipt_date = product.get('receipt_date')
+                    if receipt_date == '' or receipt_date == 'None':
+                        receipt_date = None
+                    
                     rows_to_insert.append({
                         'user_id': user_id,
                         'original_product_name': product.get('original_product_name', ''),
@@ -186,7 +191,7 @@ def save_products_to_db(telegram_id: int, products: List[Dict[str, str]]) -> boo
                         'category': product.get('category', 'Unknown'),
                         'subcategory': product.get('subcategory', 'Unknown'),
                         'price': product.get('price', '0'),
-                        'receipt_date': product.get('receipt_date'),
+                        'receipt_date': receipt_date,
                         'currency': product.get('currency', ''),
                         'quantity': quantity
                     })

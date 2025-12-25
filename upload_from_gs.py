@@ -114,6 +114,36 @@ def read_products_from_sheet(spreadsheet_id: str, tab_name: str) -> List[Dict[st
             if 'quantity' not in product or not product['quantity']:
                 product['quantity'] = '1'
             
+            # Validate and clean receipt_date
+            if 'receipt_date' in product and product['receipt_date']:
+                date_str = product['receipt_date'].strip()
+                # Check if it looks like a valid date (contains hyphens or slashes)
+                if date_str and ('-' in date_str or '/' in date_str):
+                    # Try to validate it's actually a date
+                    try:
+                        # Try to parse common date formats
+                        from datetime import datetime
+                        # Try various formats
+                        for date_format in ['%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y']:
+                            try:
+                                datetime.strptime(date_str, date_format)
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # None of the formats worked
+                            logger.warning(f"Row {row_idx}: Invalid date format '{date_str}', setting to None")
+                            product['receipt_date'] = None
+                    except:
+                        logger.warning(f"Row {row_idx}: Invalid date '{date_str}', setting to None")
+                        product['receipt_date'] = None
+                else:
+                    # Doesn't look like a date (might be a price or other value)
+                    logger.warning(f"Row {row_idx}: Invalid date value '{date_str}' (looks like non-date data), setting to None")
+                    product['receipt_date'] = None
+            else:
+                product['receipt_date'] = None
+            
             # Validate that we have at least some data
             if product.get('original_product_name') or product.get('translated_product_name'):
                 products.append(product)
@@ -237,7 +267,8 @@ Examples:
         for i, product in enumerate(products[:3], 1):
             logger.info(f"  {i}. {product.get('original_product_name', 'N/A')} - "
                        f"{product.get('category', 'N/A')}/{product.get('subcategory', 'N/A')} - "
-                       f"{product.get('price', 'N/A')} {product.get('currency', 'N/A')}")
+                       f"{product.get('price', 'N/A')} {product.get('currency', 'N/A')} - "
+                       f"Date: {product.get('receipt_date', 'N/A')}")
         
         if args.dry_run:
             logger.info("\n🔍 Dry run mode - skipping database upload")
