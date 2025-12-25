@@ -27,6 +27,7 @@ receipty-bot/
 │   └── receipts_csv/          # Generated receipt CSV files
 ├── requirements.txt           # Python dependencies
 ├── init_db.py                 # Database initialization script
+├── upload_from_gs.py          # Upload data from Google Sheets to database
 └── README.md                  # This file
 ```
 
@@ -140,6 +141,24 @@ receipty-bot/
    - Send `/start` to begin
    - Upload one or more receipt photos
    - Wait for the bot to process and return categorized product information
+
+## Additional Scripts
+
+### Upload from Google Sheets to Database
+
+If you have existing receipt data in Google Sheets and want to import it into the database:
+
+```bash
+python upload_from_gs.py --telegram-id YOUR_TELEGRAM_ID
+```
+
+Options:
+- `--telegram-id`: (Required) Telegram user ID to associate the products with
+- `--spreadsheet-id`: (Optional) Google Sheets spreadsheet ID (defaults to env variable)
+- `--tab-name`: (Optional) Tab/sheet name to read from (defaults to env variable)
+- `--dry-run`: Preview what would be uploaded without saving to database
+
+See [UPLOAD_FROM_GS.md](UPLOAD_FROM_GS.md) for detailed documentation.
 
 ## How it works
 

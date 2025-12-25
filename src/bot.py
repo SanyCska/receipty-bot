@@ -223,15 +223,85 @@ async def process_photos_with_language(update: Update, context: ContextTypes.DEF
     else:
         await message.reply_text("📸 Обрабатываю фото... Пожалуйста, подождите.")
     
+    # Helper to detect obviously bad OpenAI responses where everything is Unknown/0.00
+    def _is_suspicious_products(products: list) -> bool:
+        if not products:
+            return True
+        
+        from decimal import Decimal, InvalidOperation
+        
+        all_zero_price = True
+        all_unknown_category = True
+        all_empty_names = True
+        
+        for p in products:
+            # Price check
+            price_str = str(p.get('price', '0')).replace(',', '.')
+            try:
+                price_val = Decimal(price_str)
+            except (InvalidOperation, ValueError):
+                price_val = Decimal('0')
+            if price_val != 0:
+                all_zero_price = False
+            
+            # Category check
+            category = (p.get('category') or '').strip() or 'Unknown'
+            subcategory = (p.get('subcategory') or '').strip() or 'Unknown'
+            if not (category.lower() == 'unknown' and subcategory.lower() == 'unknown'):
+                all_unknown_category = False
+            
+            # Names check
+            orig_name = (p.get('original_product_name') or '').strip()
+            trans_name = (p.get('translated_product_name') or '').strip()
+            if orig_name or trans_name:
+                all_empty_names = False
+        
+        # Treat as suspicious if everything is zero + unknown, or zero + no names
+        suspicious = (all_zero_price and all_unknown_category) or (all_zero_price and all_empty_names)
+        if suspicious:
+            logger.warning(
+                "Detected suspicious OpenAI products result: all_zero_price=%s, "
+                "all_unknown_category=%s, all_empty_names=%s",
+                all_zero_price,
+                all_unknown_category,
+                all_empty_names,
+            )
+        return suspicious
+    
     try:
         logger.info(f"Processing {len(photos)} photos with language: {language}")
-        csv_response = await openai_service.process_receipts(photos, language=language)
-        products = csv_parser.parse_csv(csv_response)
         
-        # Initialize quantity for each product (default 1 if not present)
-        for product in products:
-            if 'quantity' not in product:
-                product['quantity'] = '1'
+        max_result_retries = 1  # how many times to re-call OpenAI if result looks wrong
+        result_attempt = 0
+        products = []
+        csv_response = ""
+        
+        while True:
+            csv_response = await openai_service.process_receipts(photos, language=language)
+            products = csv_parser.parse_csv(csv_response)
+            
+            # Initialize quantity for each product (default 1 if not present)
+            for product in products:
+                if 'quantity' not in product:
+                    product['quantity'] = '1'
+            
+            if not _is_suspicious_products(products) or result_attempt >= max_result_retries:
+                if result_attempt > 0:
+                    logger.info(
+                        "Using products from result attempt %s (suspicious=%s)",
+                        result_attempt + 1,
+                        _is_suspicious_products(products),
+                    )
+                break
+            
+            # Retry once more if the result clearly looks wrong
+            result_attempt += 1
+            logger.info(
+                "Suspicious OpenAI result detected (attempt %s). "
+                "Re-sending request to OpenAI (max retries=%s)...",
+                result_attempt,
+                max_result_retries,
+            )
         
         # Store products and CSV in context
         context.user_data['pending_receipt_csv'] = csv_response
